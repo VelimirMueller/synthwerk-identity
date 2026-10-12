@@ -39,6 +39,274 @@
       {"label": "legacy-final tag", "value": "Kotlin/Quarkus prototype", "state": "off"},
       {"label": "Login", "value": "Zitadel v4: OIDC, passkeys, MFA", "state": "planned"},
       {"label": "Branching", "value": "dev, stg by tag, prd by digest", "state": "planned"}
-    ]}
-  ]
+    ]},
+    {
+      "key": "lead",
+      "type": "lead",
+      "title": "ABOUT",
+      "text": "**synthwerk-identity** owns organisations, roles, entitlements and the paywall for the synthwerk services. Zitadel says who you are. This service decides what that is worth."
+    },
+    {
+      "key": "what",
+      "type": "notes",
+      "title": "THE SHORT VERSION",
+      "columns": 2,
+      "items": [
+        {
+          "lead": "Owns the model",
+          "text": "Owns organisations, roles and entitlements for every synthwerk service."
+        },
+        {
+          "lead": "Login by Zitadel v4",
+          "text": "OIDC, passkeys, MFA. No login form lives here."
+        },
+        {
+          "lead": "Stripe in, entitlements out",
+          "text": "Turns Stripe events into one entitlements table. The paywall reads that table."
+        },
+        {
+          "lead": "Identity events",
+          "text": "Emits identity events on the NATS bus. The other services trust them."
+        }
+      ]
+    },
+    {
+      "key": "startnotes",
+      "type": "notes",
+      "title": "WHAT YOU GET",
+      "columns": 3,
+      "items": [
+        {
+          "lead": "Two files",
+          "text": "`LICENSE` and `README.md` are the whole tree. `ls` shows nothing else."
+        },
+        {
+          "lead": "Nothing runs yet",
+          "text": "No service runs from this repo yet. `main` carries the Synthwerk skeleton."
+        },
+        {
+          "lead": "Epic E2 Identity",
+          "text": "The rewrite is epic **E2 Identity**, planned on the [synthwerk map](https://github.com/VelimirMueller/synthwerk)."
+        }
+      ]
+    },
+    {
+      "key": "calls",
+      "type": "cards",
+      "title": "IDENTITY TALKS TO THREE THINGS",
+      "items": [
+        {
+          "title": "ZITADEL V4",
+          "text": "The login: OIDC, passkeys, MFA."
+        },
+        {
+          "title": "POSTGRES",
+          "text": "Orgs, roles, entitlements."
+        },
+        {
+          "title": "NATS BUS",
+          "text": "Identity events for the other services."
+        }
+      ]
+    },
+    {
+      "key": "paywall",
+      "type": "flow",
+      "title": "THE PAYWALL",
+      "nodes": [
+        {
+          "title": "STRIPE EVENTS",
+          "sub": "Payments come in as webhooks."
+        },
+        {
+          "title": "ENTITLEMENTS",
+          "sub": "One table, owned here.",
+          "hot": true
+        },
+        {
+          "title": "THE PAYWALL",
+          "sub": "Reads that table."
+        }
+      ]
+    },
+    {
+      "key": "hownotes",
+      "type": "notes",
+      "title": "WHO ASKS",
+      "columns": 2,
+      "items": [
+        {
+          "lead": "Clients",
+          "text": "Clients are synthwerk-studio, synthwerk-widgets and the SDK apps. They ask, identity answers."
+        },
+        {
+          "lead": "Stack",
+          "text": "The rewrite targets Go 1.27."
+        }
+      ]
+    },
+    {
+      "key": "usage",
+      "type": "notes",
+      "title": "WHERE IT FITS",
+      "columns": 2,
+      "items": [
+        {
+          "lead": "Ecosystem map",
+          "text": "[synthwerk](https://github.com/VelimirMueller/synthwerk). One repo per role. Start there."
+        },
+        {
+          "lead": "Blueprint",
+          "text": "Shared CI, lint configs and templates: [synthwerk-blueprint](https://github.com/VelimirMueller/synthwerk-blueprint)."
+        },
+        {
+          "lead": "Renamed",
+          "text": "This repo was renamed. The old URL still redirects here."
+        },
+        {
+          "lead": "Legacy code",
+          "text": "The tag `legacy-final` keeps the old service: a Kotlin/Quarkus prototype with hard-coded users and no tokens."
+        },
+        {
+          "lead": "Branching",
+          "text": "When the code returns: `main` deploys to dev, a `vX.Y.Z` tag to stg, an approved digest to prd."
+        },
+        {
+          "lead": "License",
+          "text": "MIT. Copyright 2025 Velimir Müller."
+        }
+      ]
+    },
+    {
+      "key": "statuslog",
+      "type": "commands",
+      "title": "STATUS LOG",
+      "rows": [
+        {
+          "cmd": "[ STATUS ]",
+          "text": "Rewrite planned, epic E2 identity."
+        },
+        {
+          "cmd": "[ WORKS ]",
+          "text": "The README. The LICENSE."
+        },
+        {
+          "cmd": "[ NEXT ]",
+          "text": "The service itself, in Go."
+        }
+      ]
+    },
+    {
+      "key": "honest",
+      "type": "notes",
+      "title": "TESTS AND CHANGELOG",
+      "columns": 3,
+      "items": [
+        {
+          "lead": "Tests",
+          "text": "No test command yet. There is no code to test."
+        },
+        {
+          "lead": "Changelog",
+          "text": "No CHANGELOG yet."
+        },
+        {
+          "lead": "Numbers later",
+          "text": "When the rewrite lands, this section gets honest numbers."
+        }
+      ]
+    },
+    {
+      "key": "links",
+      "type": "buttons",
+      "items": [
+        {
+          "label": "synthwerk",
+          "sub": "ecosystem map, epic E2",
+          "href": "https://github.com/VelimirMueller/synthwerk"
+        },
+        {
+          "label": "Blueprint",
+          "sub": "shared CI, lint, templates",
+          "href": "https://github.com/VelimirMueller/synthwerk-blueprint"
+        },
+        {
+          "label": "legacy-final",
+          "sub": "old Kotlin/Quarkus service",
+          "href": "https://github.com/VelimirMueller/synthwerk-identity/tree/legacy-final"
+        },
+        {
+          "label": "License",
+          "sub": "MIT",
+          "href": "LICENSE"
+        },
+        {
+          "label": "VM. flagship",
+          "sub": "github.com/VelimirMueller",
+          "href": "https://github.com/VelimirMueller"
+        },
+        {
+          "label": "Plain text",
+          "sub": "show copyable commands"
+        }
+      ]
+    },
+    {
+      "key": "footer",
+      "type": "footer",
+      "studio": "VM. studio / flagship",
+      "text": "open source · look per vm-brand playbook · MIT © 2025 Velimir Müller",
+      "eof": "-- EOF -- access granted, eventually --"
+    }
+  ],
+  "readme": {
+    "hero_alt": "SYNTHWERK-IDENTITY. It knows who you are. And what you paid for. Orgs, roles, entitlements. Status: rewrite.",
+    "items": [
+      "lead",
+      "stats",
+      "divider:what",
+      "features",
+      "what",
+      "divider:start",
+      "start",
+      {
+        "details": "links",
+        "chip": 6,
+        "code": [
+          [
+            "bash",
+            "gh repo clone VelimirMueller/synthwerk-identity\ncd synthwerk-identity\nls"
+          ]
+        ]
+      },
+      "startnotes",
+      {
+        "buttons": "links",
+        "only": [
+          1,
+          2,
+          3
+        ]
+      },
+      "divider:how",
+      "flow",
+      "calls",
+      "paywall",
+      "hownotes",
+      "divider:usage",
+      "usage",
+      "divider:status",
+      "status",
+      "statuslog",
+      "honest",
+      {
+        "buttons": "links",
+        "only": [
+          4,
+          5
+        ]
+      },
+      "footer"
+    ]
+  }
 }
