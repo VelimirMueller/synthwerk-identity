@@ -63,6 +63,26 @@ ls
 
 </details>
 
+## Run locally
+
+The scaffold is Go 1.27. It needs a Postgres URL; migrations apply at startup.
+
+```bash
+export SYNTHWERK_IDENTITY_DATABASE_URL="postgres://synthwerk:synthwerk@127.0.0.1:5432/identity"
+just test              # go test -race ./...
+go run ./cmd/identity  # serves :8080
+```
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SYNTHWERK_IDENTITY_DATABASE_URL` | none, required | Postgres URL (secret) |
+| `SYNTHWERK_IDENTITY_HTTP_ADDR` | `:8080` | Listen address |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | OTLP gRPC collector. Unset = no export |
+| `SYNTHWERK_IDENTITY_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARN`, `ERROR` |
+| `SYNTHWERK_IDENTITY_LOG_FORMAT` | `json` | `console` only in env `local` |
+
+Probes: `GET /healthz` (liveness) and `GET /readyz` (readiness, pings Postgres).
+
 <p>
 <picture>
   <source media="(prefers-color-scheme: light)" srcset="assets/readme/startnotes-v2-light.svg">
