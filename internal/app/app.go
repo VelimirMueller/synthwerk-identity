@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
@@ -71,7 +72,8 @@ func Migrate(ctx context.Context, db *pgxpool.Pool) error {
 		return fmt.Errorf("app: migrate: %w", err)
 	}
 	for _, sql := range all {
-		if _, err := db.Exec(ctx, sql); err != nil {
+		// The simple protocol runs a file with several statements in one call.
+		if _, err := db.Exec(ctx, sql, pgx.QueryExecModeSimpleProtocol); err != nil {
 			return fmt.Errorf("app: migrate: %w", err)
 		}
 	}
