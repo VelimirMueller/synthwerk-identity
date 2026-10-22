@@ -64,10 +64,16 @@ func New(pinger Pinger, logger *slog.Logger, cfg Config) (*App, error) {
 // Handler is the HTTP handler of the service.
 func (a *App) Handler() http.Handler { return a.handler }
 
-// Migrate applies the SQL migrations of the service, like pulse applies its schema.
+// Migrate applies all SQL migrations of the service in file-name order.
 func Migrate(ctx context.Context, db *pgxpool.Pool) error {
-	if _, err := db.Exec(ctx, migrations.Schema); err != nil {
+	all, err := migrations.All()
+	if err != nil {
 		return fmt.Errorf("app: migrate: %w", err)
+	}
+	for _, sql := range all {
+		if _, err := db.Exec(ctx, sql); err != nil {
+			return fmt.Errorf("app: migrate: %w", err)
+		}
 	}
 	return nil
 }
