@@ -1,11 +1,13 @@
-# Thin caller of the synthwerk blueprint go-ci: gofmt, golangci-lint, go test, go build.
-# Required check for the ruleset: "ci / check" (the gate over the blueprint job).
+# Thin caller of the synthwerk blueprint. The blueprint runs gofmt, golangci-lint,
+# go test -race ./... and go build, and builds, scans and (on push) signs the image.
+# Required checks for the ruleset: "ci / required" (blueprint jobs) and "gate" (all jobs).
 name: ci
 
 on:
   pull_request:
   push:
     branches: [main]
+    tags: ["v*"]
 
 permissions: {}
 
@@ -24,10 +26,21 @@ jobs:
       contents: read
     uses: VelimirMueller/synthwerk-blueprint/.github/workflows/go-ci.yml@v1
 
-  # One check over the blueprint job.
-  check:
+  # Blueprint: build, SBOM, Trivy scan. Push to main or a v* tag: also push to
+  # ghcr.io/velimirmueller/synthwerk-identity, sign with cosign and attest the build provenance.
+  image:
+    # GitHub checks these at start, also on pull requests, where nothing is pushed.
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    uses: VelimirMueller/synthwerk-blueprint/.github/workflows/image.yml@v1
+
+  # One check over the blueprint jobs ("ci / required" covers the go-ci blueprint only).
+  gate:
     if: always()
-    needs: [ci]
+    needs: [ci, image]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions: {}
