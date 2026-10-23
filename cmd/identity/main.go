@@ -10,6 +10,9 @@
 //	SYNTHWERK_PLATFORM_ENV               local (default), ci, dev, stg, prd
 //	SYNTHWERK_IDENTITY_HTTP_ADDR         listen address, default :8080
 //	SYNTHWERK_IDENTITY_DATABASE_URL      Postgres URL (required, secret)
+//	SYNTHWERK_IDENTITY_HOOKS_ADDR        Zitadel Action listener, default :8081 (network zitadel-hooks only)
+//	SYNTHWERK_IDENTITY_ZITADEL_SIGNING_KEY_FILE  file with the Action target signing key (secret).
+//	                                     Unset = no Action listener.
 //	SYNTHWERK_IDENTITY_LOG_LEVEL         DEBUG, INFO (default), WARN, ERROR
 //	SYNTHWERK_IDENTITY_LOG_FORMAT        json (default) or console (local only)
 //	OTEL_EXPORTER_OTLP_ENDPOINT          collector (gRPC), for example http://telemetry:4317. Unset = no export.
@@ -28,17 +31,20 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/VelimirMueller/synthwerk-contracts/go/kit/cloudevents"
 	"github.com/VelimirMueller/synthwerk-contracts/go/kit/env"
 	kitlog "github.com/VelimirMueller/synthwerk-contracts/go/kit/log"
 	kitotel "github.com/VelimirMueller/synthwerk-contracts/go/kit/otel"
 
 	"github.com/VelimirMueller/synthwerk-identity/internal/app"
+	"github.com/VelimirMueller/synthwerk-identity/internal/zitadelhook"
 )
 
 // Set by -ldflags at build time.
@@ -133,20 +139,68 @@ func run(ctx context.Context) error {
 		slog.String("event.name", "service.started"),
 		slog.String("server.address", srv.Addr))
 
+	servers := []*http.Server{srv}
+	if hooks, err := hookServer(db, logger, logOpts.Env); err != nil {
+		return err
+	} else if hooks != nil {
+		servers = append(servers, hooks)
+		logger.InfoContext(ctx, "zitadel hook listening",
+			slog.String("event.name", "zitadel_hook.started"),
+			slog.String("server.address", hooks.Addr))
+	}
+
 	g, gctx := errgroup.WithContext(ctx)
-	g.Go(func() error {
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			return err
-		}
-		return nil
-	})
-	g.Go(func() error {
-		<-gctx.Done()
-		sctx, cancel := context.WithTimeout(context.WithoutCancel(gctx), 10*time.Second)
-		defer cancel()
-		return srv.Shutdown(sctx)
-	})
+	for _, s := range servers {
+		g.Go(func() error {
+			if err := s.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				return err
+			}
+			return nil
+		})
+		g.Go(func() error {
+			<-gctx.Done()
+			sctx, cancel := context.WithTimeout(context.WithoutCancel(gctx), 10*time.Second)
+			defer cancel()
+			return s.Shutdown(sctx)
+		})
+	}
 	return g.Wait()
+}
+
+// hookServer is the Zitadel Action listener on its own address, or nil when no
+// signing key file is set. It serves only zitadelhook.Path.
+func hookServer(db *pgxpool.Pool, logger *slog.Logger, platformEnv string) (*http.Server, error) {
+	keyFile := env.Get(app.Service, "ZITADEL_SIGNING_KEY_FILE", "")
+	if keyFile == "" {
+		return nil, nil
+	}
+	source, err := cloudevents.Source(app.Service, platformEnv)
+	if err != nil {
+		return nil, err
+	}
+	h := &zitadelhook.Handler{
+		Store: zitadelhook.Postgres{DB: db},
+		SigningKey: func() (string, error) {
+			b, err := os.ReadFile(keyFile) //nolint:gosec // G304: path from our own config
+			if err != nil {
+				return "", err
+			}
+			return strings.TrimSpace(string(b)), nil
+		},
+		Source: source,
+		Log:    logger,
+		Now:    time.Now,
+	}
+	mux := http.NewServeMux()
+	mux.Handle(zitadelhook.Path, h)
+	return &http.Server{
+		Addr:              env.Get(app.Service, "HOOKS_ADDR", ":8081"),
+		Handler:           kitlog.HTTP(logger, mux),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+	}, nil
 }
 
 func healthcheck(addr string) error {
