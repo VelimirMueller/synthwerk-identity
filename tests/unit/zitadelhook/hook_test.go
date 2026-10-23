@@ -130,6 +130,7 @@ func TestRejects(t *testing.T) {
 		{"older than 300 s", call, zitadelhook.Sign([]byte(call), key, now.Add(-301*time.Second)), http.StatusUnauthorized},
 		{"more than 300 s ahead", call, zitadelhook.Sign([]byte(call), key, now.Add(301*time.Second)), http.StatusUnauthorized},
 		{"header without v1", call, "t=1792753772", http.StatusUnauthorized},
+		{"two timestamps", call, "t=1," + signed, http.StatusUnauthorized},
 		{"not JSON", "nope", zitadelhook.Sign([]byte("nope"), key, now), http.StatusBadRequest},
 		{"no org id", noOrg, zitadelhook.Sign([]byte(noOrg), key, now), http.StatusBadRequest},
 		{"no sequence", noSeq, zitadelhook.Sign([]byte(noSeq), key, now), http.StatusBadRequest},

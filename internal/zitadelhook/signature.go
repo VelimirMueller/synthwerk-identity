@@ -45,8 +45,11 @@ func Verify(body []byte, header, key string, now time.Time) error {
 		}
 		switch k {
 		case "t":
+			if ts != "" {
+				return ErrBadHeader // one timestamp only: no doubt which one was signed
+			}
 			ts = v
-		case "v1":
+		case "v1": // other keys are ignored, as in Zitadel's own validator
 			sig, err := hex.DecodeString(v)
 			if err != nil {
 				return ErrBadHeader
