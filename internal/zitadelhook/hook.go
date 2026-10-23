@@ -111,7 +111,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	if c.AggregateID == "" || c.ResourceOwner == "" || c.InstanceID == "" || c.CreatedAt.IsZero() {
+	// Every part of the dedup key must be set, else two events could share a key.
+	if c.AggregateType != "user" || c.Sequence == 0 || c.AggregateID == "" || c.ResourceOwner == "" || c.InstanceID == "" || c.CreatedAt.IsZero() {
 		http.Error(w, "event misses ids", http.StatusBadRequest)
 		return
 	}

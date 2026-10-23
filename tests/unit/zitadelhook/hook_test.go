@@ -119,6 +119,7 @@ func TestRejects(t *testing.T) {
 	signed := zitadelhook.Sign([]byte(call), key, now)
 	other := strings.Replace(call, `"user.human.added"`, `"user.human.changed"`, 1)
 	noOrg := strings.Replace(call, `"resourceOwner":"396374393657324808"`, `"resourceOwner":""`, 1)
+	noSeq := strings.Replace(call, `"sequence":1`, `"sequence":0`, 1)
 	cases := []struct {
 		name, body, sig string
 		want            int
@@ -131,6 +132,7 @@ func TestRejects(t *testing.T) {
 		{"header without v1", call, "t=1792753772", http.StatusUnauthorized},
 		{"not JSON", "nope", zitadelhook.Sign([]byte("nope"), key, now), http.StatusBadRequest},
 		{"no org id", noOrg, zitadelhook.Sign([]byte(noOrg), key, now), http.StatusBadRequest},
+		{"no sequence", noSeq, zitadelhook.Sign([]byte(noSeq), key, now), http.StatusBadRequest},
 		{"other event type", other, zitadelhook.Sign([]byte(other), key, now), http.StatusNoContent},
 	}
 	for _, c := range cases {
