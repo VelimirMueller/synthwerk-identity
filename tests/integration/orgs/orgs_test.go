@@ -304,7 +304,7 @@ func TestChangeRole(t *testing.T) {
 		var wg sync.WaitGroup
 		errs := make([]error, 2)
 		for i, pair := range [][2]string{{owner, owner2}, {owner2, owner}} {
-			wg.Go(func() { _, _, errs[i] = s.ChangeRole(context.Background(), org, pair[0], pair[1], orgs.Admin) })
+			wg.Go(func() { _, _, errs[i] = s.ChangeRole(t.Context(), org, pair[0], pair[1], orgs.Admin) })
 		}
 		wg.Wait()
 		ok := 0

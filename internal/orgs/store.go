@@ -354,6 +354,11 @@ func insertOrg(ctx context.Context, tx pgx.Tx, zitadelOrgID, name string) (Org, 
 		if !errors.Is(err, ErrNotFound) {
 			return org, err
 		}
+		// A conflict: another transaction added this org, or the slug is taken.
+		org, err = scanOrg(tx.QueryRow(ctx, `SELECT `+orgCols+` FROM orgs WHERE zitadel_org_id = $1 FOR UPDATE`, zitadelOrgID))
+		if !errors.Is(err, ErrNotFound) {
+			return org, err
+		}
 	}
 	return Org{}, fmt.Errorf("orgs: no free slug for zitadel org %s", zitadelOrgID)
 }
@@ -368,7 +373,7 @@ func Slug(name string) string {
 		s = "o-" + s
 	}
 	if len(s) > 64 {
-		s = strings.TrimRight(s[:64], "-")
+		s = strings.TrimRight(s[:62], "-")
 	}
 	if len(s) < 2 {
 		s += "-o"

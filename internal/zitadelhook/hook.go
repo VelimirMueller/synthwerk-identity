@@ -16,6 +16,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"slices"
 	"time"
 
@@ -174,6 +175,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+var userIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
+
 // grantPayload is the part of a user grant event payload that identity reads.
 type grantPayload struct {
 	UserID    string   `json:"userId"`
@@ -211,6 +214,12 @@ func (h *Handler) grant(w http.ResponseWriter, r *http.Request, c Call) {
 		http.Error(w, "event payload is not a user grant", http.StatusBadRequest)
 		return
 	}
+	if p.UserID != "" && !userIDPattern.MatchString(p.UserID) {
+		http.Error(w, "event payload has a bad user id", http.StatusBadRequest)
+		return
+	}
+	// changed and removed events may not name the project: the store then acts only
+	// on a grant it mirrored before (by grant id), which was of this project.
 	if p.ProjectID != "" && h.ProjectID != "" && p.ProjectID != h.ProjectID {
 		w.WriteHeader(http.StatusNoContent) // another project: not an org role
 		return
@@ -229,7 +238,13 @@ func (h *Handler) grant(w http.ResponseWriter, r *http.Request, c Call) {
 	}
 	name := ""
 	if !change.Removed {
-		if _, err := h.Grants.OrgByZitadelID(r.Context(), c.ResourceOwner); errors.Is(err, orgs.ErrNotFound) && h.OrgName != nil {
+		_, err := h.Grants.OrgByZitadelID(r.Context(), c.ResourceOwner)
+		if err != nil && !errors.Is(err, orgs.ErrNotFound) {
+			h.Log.ErrorContext(r.Context(), "zitadel hook: org not read", slog.String("event.name", "zitadel_hook.failed"), slog.String("exception.message", err.Error()))
+			http.Error(w, "store failed", http.StatusInternalServerError)
+			return
+		}
+		if errors.Is(err, orgs.ErrNotFound) && h.OrgName != nil {
 			n, err := h.OrgName(r.Context(), c.ResourceOwner)
 			if err != nil {
 				// The org stays unnamed; the slug falls back to o-<id>.
@@ -239,6 +254,7 @@ func (h *Handler) grant(w http.ResponseWriter, r *http.Request, c Call) {
 			name = n
 		}
 	}
+	// ApplyGrant drops a repeat by change.Key (zitadel_event_seen), like RecordOnce.
 	out, err := h.Grants.ApplyGrant(r.Context(), change, name)
 	if err != nil {
 		h.Log.ErrorContext(r.Context(), "zitadel hook: grant not mirrored", slog.String("event.name", "zitadel_hook.failed"), slog.String("exception.message", err.Error()))

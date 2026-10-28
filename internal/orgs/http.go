@@ -230,8 +230,11 @@ func pageParams(r *http.Request) (limit int, after string, ok bool) {
 		limit = n
 	}
 	if c := q.Get("cursor"); c != "" {
+		if len(c) > 256 {
+			return 0, "", false
+		}
 		b, err := base64.RawURLEncoding.DecodeString(c)
-		if err != nil || len(c) > 256 || !subPattern.Match(b) {
+		if err != nil || !subPattern.Match(b) {
 			return 0, "", false
 		}
 		after = string(b)
