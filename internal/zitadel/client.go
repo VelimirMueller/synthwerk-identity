@@ -1,6 +1,7 @@
 // Package zitadel writes org role changes to Zitadel user grants (synthwerk#29) and
 // reads org names. It calls the v1 management REST API inside the stack with the PAT
-// of a machine user that may manage user grants.
+// of the machine user identity-sync. That user lives in the platform org and is
+// PROJECT_GRANT_OWNER on each project grant of synthwerk-api: no instance role.
 package zitadel
 
 import (
@@ -14,7 +15,10 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/VelimirMueller/synthwerk-contracts/go/kit/auth"
 
 	"github.com/VelimirMueller/synthwerk-identity/internal/orgs"
 )
@@ -32,7 +36,14 @@ type Client struct {
 	ProjectID string
 	// HTTP is the client. Nil: a client with a 10 s timeout.
 	HTTP *http.Client
+
+	mu       sync.Mutex
+	platform string // org of the machine user = the platform org, once read
 }
+
+// ErrRefused: the write would touch the platform org or the operator role. identity
+// never changes platform users or operator grants (synthwerk#29).
+var ErrRefused = errors.New("zitadel: refused: platform org or operator grant")
 
 // APIError is a non-2xx answer. Message is Zitadel's text; it holds no secrets.
 type APIError struct {
@@ -57,6 +68,16 @@ func notChanged(err error) bool {
 // SetRole implements orgs.Grants: the grant keeps its other role keys (end_user)
 // and gets exactly one org role, to.
 func (c *Client) SetRole(ctx context.Context, zitadelOrgID, userSub, grantID string, to orgs.Role) error {
+	if !to.Valid() {
+		return ErrRefused
+	}
+	platform, err := c.PlatformOrg(ctx)
+	if err != nil {
+		return err
+	}
+	if zitadelOrgID == platform {
+		return ErrRefused
+	}
 	if grantID == "" {
 		id, err := c.findGrant(ctx, zitadelOrgID, userSub)
 		if err != nil {
@@ -73,10 +94,13 @@ func (c *Client) SetRole(ctx context.Context, zitadelOrgID, userSub, grantID str
 	if err := c.do(ctx, http.MethodGet, path, zitadelOrgID, nil, &got); err != nil {
 		return err
 	}
+	if slices.Contains(got.UserGrant.RoleKeys, auth.RoleOperator) {
+		return ErrRefused
+	}
 	keys := slices.DeleteFunc(slices.Clone(got.UserGrant.RoleKeys), func(k string) bool { return orgs.Role(k).Valid() })
 	keys = append(keys, string(to))
 	slices.Sort(keys)
-	err := c.do(ctx, http.MethodPut, path, zitadelOrgID, map[string]any{"roleKeys": keys}, nil)
+	err = c.do(ctx, http.MethodPut, path, zitadelOrgID, map[string]any{"roleKeys": keys}, nil)
 	if notChanged(err) {
 		return nil
 	}
@@ -102,17 +126,45 @@ func (c *Client) findGrant(ctx context.Context, zitadelOrgID, userSub string) (s
 	return found.Result[0].ID, nil
 }
 
-// OrgName returns the name of a Zitadel org.
-func (c *Client) OrgName(ctx context.Context, zitadelOrgID string) (string, error) {
-	var got struct {
-		Org struct {
-			Name string `json:"name"`
-		} `json:"org"`
+// PlatformOrg returns the org of the machine user, which is the platform org
+// (synthwerk). It is read once from Zitadel and kept.
+func (c *Client) PlatformOrg(ctx context.Context) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.platform != "" {
+		return c.platform, nil
 	}
-	if err := c.do(ctx, http.MethodGet, "/management/v1/orgs/me", zitadelOrgID, nil, &got); err != nil {
+	var me struct {
+		User struct {
+			Details struct {
+				ResourceOwner string `json:"resourceOwner"`
+			} `json:"details"`
+		} `json:"user"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/auth/v1/users/me", "", nil, &me); err != nil {
 		return "", err
 	}
-	return got.Org.Name, nil
+	if me.User.Details.ResourceOwner == "" {
+		return "", errors.New("zitadel: the machine user has no org")
+	}
+	c.platform = me.User.Details.ResourceOwner
+	return c.platform, nil
+}
+
+// OrgName returns the name of the org that holds a user grant. It reads the grant,
+// not the org: identity-sync is PROJECT_GRANT_OWNER on the project grant only and
+// may not read the org itself (least privilege, synthwerk#29).
+func (c *Client) OrgName(ctx context.Context, zitadelOrgID, userSub, grantID string) (string, error) {
+	var got struct {
+		UserGrant struct {
+			OrgName string `json:"orgName"`
+		} `json:"userGrant"`
+	}
+	path := "/management/v1/users/" + url.PathEscape(userSub) + "/grants/" + url.PathEscape(grantID)
+	if err := c.do(ctx, http.MethodGet, path, zitadelOrgID, nil, &got); err != nil {
+		return "", err
+	}
+	return got.UserGrant.OrgName, nil
 }
 
 func (c *Client) do(ctx context.Context, method, path, orgID string, body, out any) error {
@@ -135,7 +187,9 @@ func (c *Client) do(ctx context.Context, method, path, orgID string, body, out a
 	req.Host = c.Host
 	req.Header.Set("Authorization", "Bearer "+tok)
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("x-zitadel-orgid", orgID)
+	if orgID != "" {
+		req.Header.Set("x-zitadel-orgid", orgID)
+	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

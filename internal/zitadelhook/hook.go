@@ -100,8 +100,11 @@ type Handler struct {
 	// ProjectID is the Zitadel project synthwerk-api. Grants of other projects are
 	// dropped. Empty: every project counts.
 	ProjectID string
-	// OrgName names an org identity does not know yet. Nil: "org <zitadel id>".
-	OrgName func(ctx context.Context, zitadelOrgID string) (string, error)
+	// PlatformOrg returns the platform org. Its grants (operator) are never mirrored.
+	// Nil: no org is skipped.
+	PlatformOrg func(ctx context.Context) (string, error)
+	// OrgName names an org identity does not know yet, from the grant. Nil: "org <zitadel id>".
+	OrgName func(ctx context.Context, zitadelOrgID, userSub, grantID string) (string, error)
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -220,6 +223,18 @@ func (h *Handler) grant(w http.ResponseWriter, r *http.Request, c Call) {
 	}
 	// changed and removed events may not name the project: the store then acts only
 	// on a grant it mirrored before (by grant id), which was of this project.
+	if h.PlatformOrg != nil {
+		platform, err := h.PlatformOrg(r.Context())
+		if err != nil {
+			h.Log.ErrorContext(r.Context(), "zitadel hook: platform org not read", slog.String("event.name", "zitadel_hook.failed"), slog.String("exception.message", err.Error()))
+			http.Error(w, "platform org unknown", http.StatusServiceUnavailable)
+			return
+		}
+		if c.ResourceOwner == platform {
+			w.WriteHeader(http.StatusNoContent) // platform users are never org members
+			return
+		}
+	}
 	if p.ProjectID != "" && h.ProjectID != "" && p.ProjectID != h.ProjectID {
 		w.WriteHeader(http.StatusNoContent) // another project: not an org role
 		return
@@ -244,8 +259,8 @@ func (h *Handler) grant(w http.ResponseWriter, r *http.Request, c Call) {
 			http.Error(w, "store failed", http.StatusInternalServerError)
 			return
 		}
-		if errors.Is(err, orgs.ErrNotFound) && h.OrgName != nil {
-			n, err := h.OrgName(r.Context(), c.ResourceOwner)
+		if errors.Is(err, orgs.ErrNotFound) && h.OrgName != nil && p.UserID != "" {
+			n, err := h.OrgName(r.Context(), c.ResourceOwner, p.UserID, c.AggregateID)
 			if err != nil {
 				// The org stays unnamed; the slug falls back to o-<id>.
 				h.Log.WarnContext(r.Context(), "zitadel hook: org name not read", slog.String("event.name", "zitadel_hook.org_name_failed"),
