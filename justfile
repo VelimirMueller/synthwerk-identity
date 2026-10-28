@@ -17,6 +17,10 @@ lint:
 test:
     go test -race ./...
 
+# Integration tests against real Postgres (needs Docker).
+test-int:
+    go test -tags integration -race -count=1 ./tests/integration/...
+
 # Container image as CI builds it.
 image:
     docker build --build-arg COMMIT="$(git rev-parse HEAD)" -t synthwerk-identity:local .
