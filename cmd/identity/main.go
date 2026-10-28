@@ -262,6 +262,7 @@ func hookServer(db *pgxpool.Pool, store *orgs.Store, zc *zitadel.Client, logger 
 	}
 	if zc != nil {
 		h.OrgName = zc.OrgName
+		h.PlatformOrg = zc.PlatformOrg
 	}
 	mux := http.NewServeMux()
 	mux.Handle(zitadelhook.Path, h)

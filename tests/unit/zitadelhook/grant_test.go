@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/VelimirMueller/synthwerk-identity/internal/orgs"
@@ -40,7 +42,13 @@ func grantHandler(m *fakeMirror) *zitadelhook.Handler {
 	h := handler(&fakeStore{}, &bytes.Buffer{})
 	h.Grants = m
 	h.ProjectID = "proj-1"
-	h.OrgName = func(context.Context, string) (string, error) { return "Demo", nil }
+	h.OrgName = func(_ context.Context, _, user, grant string) (string, error) {
+		if user == "" || grant == "" {
+			return "", errors.New("no user or grant")
+		}
+		return "Demo", nil
+	}
+	h.PlatformOrg = func(context.Context) (string, error) { return "396374393657000001", nil }
 	return h
 }
 
@@ -84,6 +92,14 @@ func TestGrantEvents(t *testing.T) {
 	t.Run("user.grant.added - other project - dropped", func(t *testing.T) {
 		m := &fakeMirror{}
 		body := grantCall(zitadelhook.ZitadelGrantAdded, `{"userId":"1","projectId":"proj-2","roleKeys":["owner"]}`)
+		if rec := post(grantHandler(m), body, zitadelhook.Sign([]byte(body), key, now)); rec.Code != http.StatusNoContent || len(m.changes) != 0 {
+			t.Fatalf("status %d changes %d", rec.Code, len(m.changes))
+		}
+	})
+	t.Run("user.grant.added - platform org - dropped, platform users are never members", func(t *testing.T) {
+		m := &fakeMirror{}
+		body := strings.Replace(grantCall(zitadelhook.ZitadelGrantAdded, `{"userId":"1","projectId":"proj-1","roleKeys":["operator","owner"]}`),
+			`"resourceOwner":"396374393657324808"`, `"resourceOwner":"396374393657000001"`, 1)
 		if rec := post(grantHandler(m), body, zitadelhook.Sign([]byte(body), key, now)); rec.Code != http.StatusNoContent || len(m.changes) != 0 {
 			t.Fatalf("status %d changes %d", rec.Code, len(m.changes))
 		}

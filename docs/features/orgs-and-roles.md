@@ -45,6 +45,7 @@ updated: 2026-10-28
 | Last owner | 409 `last_owner`; a deferred trigger guards the commit too |
 | Operator | GET any active org and its members; PATCH 403 |
 | Org not visible to the caller | 404, same as unknown |
+| Zitadel writes | Machine user `identity-sync`, `PROJECT_GRANT_OWNER` per project grant, no instance role. Never the platform org, never a grant with `operator`, never the role `operator` (refused before any write). |
 | Page size | 1 to 100, default 50, cursor = base64url of the last `user_id` |
 
 ## Events
@@ -70,10 +71,12 @@ updated: 2026-10-28
 - `tests/unit/orgs/roles_test.go` — `Authorize - member changes role - denied`, `Authorize - admin grants owner - denied`, `Authorize - owner grants owner - allowed`, `Authorize - owner demotes self as last owner - conflict`, `Claims - roles claim with several roles - highest role wins`, `Operator - is_operator - never an org role`
 - `tests/integration/orgs/orgs_test.go` — `ChangeRole - success - membership and outbox row in one commit, Zitadel grant written`, `ChangeRole - Zitadel fake fails - mirror rolled back, no event`, `ChangeRole - last owner demoted - rejected, row unchanged`, `ChangeRole - two parallel demotions of two owners - one succeeds`, `Action org created - same event twice - one org, one owner`
 - `tests/integration/orgs/orgs_test.go` — `PATCH member - member token - 403 generic body`, `PATCH member - owner token - 200`, `PATCH member - token of other org - 404`, `PATCH member - forged token - 401`, `ListMembers - admin demoted, old admin token - 403`
-- `tests/unit/zitadelhook/grant_test.go`, `tests/unit/zitadel/client_test.go`
+- `tests/unit/zitadelhook/grant_test.go` — `user.grant.added - platform org - dropped, platform users are never members`
+- `tests/unit/zitadel/client_test.go` — `SetRole - platform org, operator grant or operator role - refused, no write`
 
 ## Changes
 
 | Date | Change |
 |---|---|
 | 2026-10-28 | First version (synthwerk#29). |
+| 2026-10-28 | Least privilege: org name from the grant, platform org and operator refused before any Zitadel write. |
