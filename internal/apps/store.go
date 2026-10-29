@@ -122,6 +122,7 @@ func (s *Store) Create(ctx context.Context, org orgs.Org, actorSub, name string,
 	if err := requireAdmin(ctx, tx, org.ID, actorSub); err != nil {
 		return App{}, err
 	}
+	// Every app insert goes through checkLimit in the same transaction.
 	if err := checkLimit(ctx, tx, org.ID); err != nil {
 		return App{}, err
 	}

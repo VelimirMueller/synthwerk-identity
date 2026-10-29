@@ -193,7 +193,9 @@ func (h *Handler) updateApp(w http.ResponseWriter, r *http.Request) {
 
 // getWidgetSettings answers the widget of an app without a token. Check order:
 // app → org active → Origin in the allow-list. The answer holds the settings
-// only. cors set Vary: Origin; refusals are no-store (WriteProblem).
+// only. The route is registered through h.cors, which sets Vary: Origin on
+// every answer and Access-Control-Allow-Origin only for a listed origin;
+// refusals are no-store (WriteProblem).
 func (h *Handler) getWidgetSettings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	app, err := h.Repo.ByID(ctx, r.PathValue("appId"))

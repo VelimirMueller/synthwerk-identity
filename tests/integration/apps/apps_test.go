@@ -411,7 +411,7 @@ func TestLimitAndSettings(t *testing.T) {
 				case errors.Is(err, apps.ErrLimitReached):
 					limited++
 				default:
-					t.Errorf("err %v", err)
+					t.Errorf("create %d: err %v", i, err)
 				}
 			})
 		}
