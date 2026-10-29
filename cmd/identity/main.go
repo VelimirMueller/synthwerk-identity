@@ -1,6 +1,7 @@
 // Command identity serves synthwerk-identity: health probes, migrations, the org
 // routes (orgs, members, roles; synthwerk#29), apps and widget tokens (synthwerk#30),
-// the Zitadel Action hook and the outbox relay.
+// the export and delete of the own account (synthwerk#41), the Zitadel Action hook,
+// the outbox relay and the Zitadel user remover.
 //
 //	identity              run the service
 //	identity healthcheck  exit 0 when /readyz answers 200 (container health check)
@@ -36,6 +37,10 @@
 //	SYNTHWERK_IDENTITY_FREE_LLM_TOKENS_PER_ORG_PER_DAY   free plan: LLM tokens per org per UTC day, default 500000, 0 = no limit
 //	SYNTHWERK_IDENTITY_FREE_APPS_PER_ORG                 free plan: apps per org, default 3, 0 = no limit
 //	                                     A change moves every free org at the next start and emits org.entitlements_changed.
+//	SYNTHWERK_IDENTITY_EXPORT_SOURCES    services asked for the own-data export, name=url comma list, for example
+//	                                     llm=http://llm:8080. Unset = the export holds identity rows only.
+//	SYNTHWERK_IDENTITY_ACCOUNT_DELETE_MFA_MAX_AGE  how old the newest sign-in with MFA may be for an
+//	                                     account delete, default 15m.
 //	SYNTHWERK_IDENTITY_LOG_LEVEL         DEBUG, INFO (default), WARN, ERROR
 //	SYNTHWERK_IDENTITY_LOG_FORMAT        json (default) or console (local only)
 //	OTEL_EXPORTER_OTLP_ENDPOINT          collector (gRPC), for example http://telemetry:4317. Unset = no export.
@@ -70,6 +75,7 @@ import (
 	kitotel "github.com/VelimirMueller/synthwerk-contracts/go/kit/otel"
 	"github.com/VelimirMueller/synthwerk-contracts/go/kit/outbox"
 
+	"github.com/VelimirMueller/synthwerk-identity/internal/account"
 	"github.com/VelimirMueller/synthwerk-identity/internal/app"
 	"github.com/VelimirMueller/synthwerk-identity/internal/apps"
 	"github.com/VelimirMueller/synthwerk-identity/internal/entitlements"
@@ -189,6 +195,9 @@ func run(ctx context.Context) error {
 		}
 		appCfg.Apps = &apps.Handler{Repo: &apps.Store{DB: db, Source: source}, Orgs: appCfg.Orgs, Widget: wi, Log: logger}
 		appCfg.Entitlements = &entitlements.Handler{Orgs: store, Repo: plans, Log: logger}
+		if appCfg.Account, err = accountHandler(db, source, logger); err != nil {
+			return err
+		}
 	} else {
 		logger.WarnContext(ctx, "no token issuer: org routes off", slog.String("event.name", "orgs.off"))
 	}
@@ -265,6 +274,12 @@ func run(ctx context.Context) error {
 	g, gctx := errgroup.WithContext(ctx)
 	if relay != nil {
 		g.Go(func() error { return relay.Run(gctx) })
+	}
+	if zc != nil {
+		rm := &account.Remover{DB: db, Users: zc, Log: logger}
+		g.Go(func() error { return rm.Run(gctx) })
+	} else {
+		logger.WarnContext(ctx, "zitadel client off: deleted accounts keep their Zitadel user", slog.String("event.name", "account.remover_off"))
 	}
 	for _, s := range servers {
 		g.Go(func() error {
@@ -347,6 +362,30 @@ func mfaRoutes(mux *http.ServeMux, db *pgxpool.Pool, zc *zitadel.Client, logger 
 		mux.Handle(mfagate.ClaimsPath, &mfagate.Claims{Store: evidence, SigningKey: readKey(f), Log: logger, Now: time.Now, MaxAge: maxAge})
 	}
 	return nil
+}
+
+// accountHandler serves the export and the delete of the own account (synthwerk#41).
+func accountHandler(db *pgxpool.Pool, source string, logger *slog.Logger) (*account.Handler, error) {
+	sources, err := account.ParseSources(env.Get(app.Service, "EXPORT_SOURCES", ""))
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", env.Key(app.Service, "EXPORT_SOURCES"), err)
+	}
+	maxAge := account.DefaultMFAMaxAge
+	if v := env.Get(app.Service, "ACCOUNT_DELETE_MFA_MAX_AGE", ""); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d <= 0 || d > mfagate.DefaultMaxAge {
+			return nil, fmt.Errorf("%s %q: want a positive duration up to %s", env.Key(app.Service, "ACCOUNT_DELETE_MFA_MAX_AGE"), v, mfagate.DefaultMaxAge)
+		}
+		maxAge = d
+	}
+	return &account.Handler{
+		Repo:      &account.Store{DB: db, Source: source},
+		Evidence:  mfagate.Postgres{DB: db},
+		Fetcher:   &account.Fetcher{Sources: sources},
+		Log:       logger,
+		Now:       time.Now,
+		MFAMaxAge: maxAge,
+	}, nil
 }
 
 // readKey returns a function that reads a target signing key per call, so a key
