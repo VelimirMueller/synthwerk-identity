@@ -3,10 +3,10 @@
   "version": "v2",
   "dividers": [
     {"key": "what",   "index": "01", "title": "WHAT IT DOES", "caption": "FRONT DOOR. ALSO THE CASH REGISTER.", "art": "strip-flagship-1"},
-    {"key": "start",  "index": "02", "title": "QUICK START",  "caption": "TWO FILES. BOTH ARE GOOD.",            "art": "strip-flagship-2"},
+    {"key": "start",  "index": "02", "title": "QUICK START",  "caption": "CLONE. TEST. RUN.",            "art": "strip-flagship-2"},
     {"key": "how",    "index": "03", "title": "HOW IT WORKS", "caption": "WHO CHECKS WHOM, IN ORDER.",          "art": "strip-flagship-3"},
-    {"key": "usage",  "index": "04", "title": "USAGE",        "caption": "SHORT, LIKE THE REPO.",               "art": "strip-flagship-4"},
-    {"key": "status", "index": "05", "title": "STATUS",       "caption": "MOSTLY PLANS. CLEARLY LABELLED.",     "art": "strip-flagship-5"}
+    {"key": "usage",  "index": "04", "title": "USAGE",        "caption": "SHORT ON PURPOSE.",               "art": "strip-flagship-4"},
+    {"key": "status", "index": "05", "title": "STATUS",       "caption": "HALF BUILT. CLEARLY LABELLED.",     "art": "strip-flagship-5"}
   ],
   "panels": [
     {"key": "stats", "type": "stats", "title": "IDENTITY IN NUMBERS", "items": [
@@ -23,9 +23,9 @@
     {"key": "start", "type": "terminal", "title": "QUICK START", "lines": [
       "$ gh repo clone VelimirMueller/synthwerk-identity",
       "$ cd synthwerk-identity",
-      "$ ls",
-      "LICENSE  README.md",
-      "# the code is the rewrite. epic E2."
+      "$ just test",
+      "# unit and integration tests",
+      "# then: go run ./cmd/identity"
     ]},
     {"key": "flow", "type": "flow", "title": "ONE LOGIN, LEFT TO RIGHT", "nodes": [
       {"title": "CLIENTS", "sub": "studio, widgets, sdk"},
@@ -34,11 +34,11 @@
       {"title": "POSTGRES · NATS", "sub": "state + identity events"}
     ], "caption": "Stripe webhooks come in. One entitlements table comes out."},
     {"key": "status", "type": "status", "title": "WHAT EXISTS TODAY", "rows": [
-      {"label": "Rewrite (epic E2 Identity)", "value": "planned", "state": "planned"},
-      {"label": "main branch", "value": "skeleton, no code", "state": "wip"},
-      {"label": "legacy-final tag", "value": "Kotlin/Quarkus prototype", "state": "off"},
-      {"label": "Login", "value": "Zitadel v4: OIDC, passkeys, MFA", "state": "planned"},
-      {"label": "Branching", "value": "dev, stg by tag, prd by digest", "state": "planned"}
+      {"label": "Rewrite (epic E2 Identity)", "value": "in progress", "state": "wip"},
+      {"label": "Orgs, members, roles", "value": "on main", "state": "ok"},
+      {"label": "Zitadel user hook", "value": "on main", "state": "ok"},
+      {"label": "Entitlements, paywall", "value": "planned", "state": "planned"},
+      {"label": "legacy-final tag", "value": "Kotlin/Quarkus prototype", "state": "off"}
     ]},
     {
       "key": "lead",
@@ -77,16 +77,16 @@
       "columns": 3,
       "items": [
         {
-          "lead": "Two files",
-          "text": "`LICENSE` and `README.md` are the whole tree. `ls` shows nothing else."
+          "lead": "Go on main",
+          "text": "`main` holds the Go service: orgs, members, roles and the Zitadel user hook."
         },
         {
-          "lead": "Nothing runs yet",
-          "text": "No service runs from this repo yet. `main` carries the Synthwerk skeleton."
+          "lead": "Needs Postgres",
+          "text": "`SYNTHWERK_IDENTITY_DATABASE_URL` is required. Migrations apply at startup."
         },
         {
           "lead": "Epic E2 Identity",
-          "text": "The rewrite is epic **E2 Identity**, planned on the [synthwerk map](https://github.com/VelimirMueller/synthwerk)."
+          "text": "The rewrite is epic **E2 Identity** on the [synthwerk map](https://github.com/VelimirMueller/synthwerk). It is in progress."
         }
       ]
     },
@@ -141,7 +141,7 @@
         },
         {
           "lead": "Stack",
-          "text": "The rewrite targets Go 1.27."
+          "text": "Go 1.27."
         }
       ]
     },
@@ -169,7 +169,7 @@
         },
         {
           "lead": "Branching",
-          "text": "When the code returns: `main` deploys to dev, a `vX.Y.Z` tag to stg, an approved digest to prd."
+          "text": "`main` deploys to dev, a `vX.Y.Z` tag to stg, an approved digest to prd."
         },
         {
           "lead": "License",
@@ -184,15 +184,15 @@
       "rows": [
         {
           "cmd": "[ STATUS ]",
-          "text": "Rewrite planned, epic E2 identity."
+          "text": "Rewrite in progress, epic E2 identity."
         },
         {
           "cmd": "[ WORKS ]",
-          "text": "The README. The LICENSE."
+          "text": "Orgs, members, roles. The Zitadel user hook."
         },
         {
           "cmd": "[ NEXT ]",
-          "text": "The service itself, in Go."
+          "text": "Entitlements and the paywall."
         }
       ]
     },
@@ -204,7 +204,7 @@
       "items": [
         {
           "lead": "Tests",
-          "text": "No test command yet. There is no code to test."
+          "text": "`just test` runs unit and integration tests."
         },
         {
           "lead": "Changelog",
@@ -212,7 +212,7 @@
         },
         {
           "lead": "Numbers later",
-          "text": "When the rewrite lands, this section gets honest numbers."
+          "text": "Coverage and latency numbers come with the first release."
         }
       ]
     },
@@ -275,7 +275,7 @@
         "code": [
           [
             "bash",
-            "gh repo clone VelimirMueller/synthwerk-identity\ncd synthwerk-identity\nls"
+            "gh repo clone VelimirMueller/synthwerk-identity\ncd synthwerk-identity\njust test   # unit and integration tests"
           ]
         ]
       },
