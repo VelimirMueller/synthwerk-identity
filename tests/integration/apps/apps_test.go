@@ -432,7 +432,7 @@ func TestLimitAndSettings(t *testing.T) {
 			}
 		}()
 		_, err := s.apps.Create(ctx, org, owner, "X", []string{shop})
-		if err == nil || errors.Is(err, apps.ErrLimitReached) {
+		if !errors.Is(err, apps.ErrNoEntitlements) || errors.Is(err, apps.ErrLimitReached) {
 			t.Fatalf("err %v", err)
 		}
 	})

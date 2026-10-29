@@ -41,6 +41,9 @@ var (
 	// ErrLimitReached: the org has apps_per_org apps already (403
 	// app_limit_reached). The error is a LimitError.
 	ErrLimitReached = errors.New("apps: app limit reached")
+	// ErrNoEntitlements: the org has no entitlements row. An active org always has
+	// one, so the create fails (500) instead of running without a limit.
+	ErrNoEntitlements = errors.New("apps: the org has no entitlements")
 )
 
 // LimitError is the refusal of a create past the apps_per_org limit.
@@ -227,7 +230,7 @@ func checkLimit(ctx context.Context, tx pgx.Tx, orgID string) error {
 	var limit int32
 	err := tx.QueryRow(ctx, `SELECT apps_per_org FROM org_entitlements WHERE org_id = $1 FOR UPDATE`, orgID).Scan(&limit)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return errors.New("apps: the org has no entitlements")
+		return ErrNoEntitlements
 	}
 	if err != nil {
 		return fmt.Errorf("apps: app limit: %w", err)
