@@ -1,6 +1,6 @@
 // Command identity serves synthwerk-identity: health probes, migrations, the org
-// routes (orgs, members, roles; synthwerk#29), the Zitadel Action hook and the
-// outbox relay.
+// routes (orgs, members, roles; synthwerk#29), apps and widget tokens (synthwerk#30),
+// the Zitadel Action hook and the outbox relay.
 //
 //	identity              run the service
 //	identity healthcheck  exit 0 when /readyz answers 200 (container health check)
@@ -17,6 +17,11 @@
 //	SYNTHWERK_IDENTITY_OIDC_AUDIENCE     accepted audiences, comma-separated, default synthwerk-api
 //	SYNTHWERK_IDENTITY_JWKS_URL          key set URL. Unset = from the issuer discovery document.
 //	SYNTHWERK_IDENTITY_PLATFORM_ORG_ID   Zitadel org that grants operator. Unset = nobody is operator.
+//	SYNTHWERK_IDENTITY_WIDGET_SIGNING_KEY_FILE  file with the ECDSA P-256 private key (PEM) that signs
+//	                                     widget tokens (secret). Unset = no widget token route, no key set.
+//	SYNTHWERK_IDENTITY_WIDGET_ISSUER     iss of widget tokens: the public URL of identity. Required with the key.
+//	SYNTHWERK_IDENTITY_WIDGET_AUDIENCE   aud of widget tokens, comma-separated, default synthwerk-api
+//	SYNTHWERK_IDENTITY_WIDGET_TOKEN_TTL  widget token lifetime, 1m to 15m, default 10m
 //	SYNTHWERK_IDENTITY_NATS_URL          NATS with credentials (secret). Unset = no relay; events stay in the outbox.
 //	SYNTHWERK_IDENTITY_ZITADEL_API_URL   Zitadel API inside the stack, for example http://zitadel:8080.
 //	SYNTHWERK_IDENTITY_ZITADEL_HOST      instance host Zitadel expects, for example auth.localhost:8080.
@@ -58,7 +63,9 @@ import (
 	"github.com/VelimirMueller/synthwerk-contracts/go/kit/outbox"
 
 	"github.com/VelimirMueller/synthwerk-identity/internal/app"
+	"github.com/VelimirMueller/synthwerk-identity/internal/apps"
 	"github.com/VelimirMueller/synthwerk-identity/internal/orgs"
+	"github.com/VelimirMueller/synthwerk-identity/internal/widget"
 	"github.com/VelimirMueller/synthwerk-identity/internal/zitadel"
 	"github.com/VelimirMueller/synthwerk-identity/internal/zitadelhook"
 )
@@ -158,6 +165,14 @@ func run(ctx context.Context) error {
 		}
 		appCfg.Verifier = v
 		appCfg.Orgs = &orgs.Handler{Repo: store, Log: logger}
+		wi, err := widgetIssuer()
+		if err != nil {
+			return err
+		}
+		if wi == nil {
+			logger.WarnContext(ctx, "no widget signing key: widget token route off", slog.String("event.name", "widget.off"))
+		}
+		appCfg.Apps = &apps.Handler{Repo: &apps.Store{DB: db, Source: source}, Orgs: appCfg.Orgs, Widget: wi, Log: logger}
 	} else {
 		logger.WarnContext(ctx, "no token issuer: org routes off", slog.String("event.name", "orgs.off"))
 	}
@@ -274,6 +289,35 @@ func hookServer(db *pgxpool.Pool, store *orgs.Store, zc *zitadel.Client, logger 
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 	}
+}
+
+// widgetIssuer signs widget tokens, or is nil when no signing key file is set. The
+// key is read once at start: a new key needs a restart.
+func widgetIssuer() (*widget.Issuer, error) {
+	keyFile := env.Get(app.Service, "WIDGET_SIGNING_KEY_FILE", "")
+	if keyFile == "" {
+		return nil, nil
+	}
+	b, err := os.ReadFile(keyFile) //nolint:gosec // G304: path from our own config
+	if err != nil {
+		return nil, errors.New(env.Key(app.Service, "WIDGET_SIGNING_KEY_FILE") + " does not read")
+	}
+	key, err := widget.ParseKey(b)
+	if err != nil {
+		return nil, err
+	}
+	var ttl time.Duration
+	if v := env.Get(app.Service, "WIDGET_TOKEN_TTL", ""); v != "" {
+		if ttl, err = time.ParseDuration(v); err != nil {
+			return nil, fmt.Errorf("%s: %w", env.Key(app.Service, "WIDGET_TOKEN_TTL"), err)
+		}
+	}
+	return widget.NewIssuer(widget.Config{
+		Issuer:    env.Get(app.Service, "WIDGET_ISSUER", ""),
+		Audiences: splitList(env.Get(app.Service, "WIDGET_AUDIENCE", widget.DefaultAudience)),
+		TTL:       ttl,
+		Key:       key,
+	})
 }
 
 // zitadelClient is the Zitadel API client, or nil when the API URL or PAT file is unset.
