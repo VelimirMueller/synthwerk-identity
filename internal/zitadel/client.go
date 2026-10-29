@@ -1,6 +1,7 @@
-// Package zitadel writes org role changes to Zitadel user grants (synthwerk#29) and
-// reads org names. It calls the v1 management REST API inside the stack with the PAT
-// of the machine user identity-sync. That user lives in the platform org and is
+// Package zitadel writes org role changes to Zitadel user grants (synthwerk#29),
+// reads org names and reads the factors of a sign-in session for the MFA gate
+// (synthwerk#94). It calls the Zitadel API inside the stack with the PAT of the
+// machine user identity-sync. That user lives in the platform org and is
 // PROJECT_GRANT_OWNER on each project grant of synthwerk-api: no instance role.
 package zitadel
 
@@ -20,6 +21,7 @@ import (
 
 	"github.com/VelimirMueller/synthwerk-contracts/go/kit/auth"
 
+	"github.com/VelimirMueller/synthwerk-identity/internal/mfagate"
 	"github.com/VelimirMueller/synthwerk-identity/internal/orgs"
 )
 
@@ -165,6 +167,69 @@ func (c *Client) OrgName(ctx context.Context, zitadelOrgID, userSub, grantID str
 		return "", err
 	}
 	return got.UserGrant.OrgName, nil
+}
+
+// factor is a session factor; only its verification time counts.
+type factor struct {
+	VerifiedAt string `json:"verifiedAt"`
+}
+
+func (f *factor) ok() bool { return f != nil && f.VerifiedAt != "" }
+
+// Session implements mfagate.Sessions. It calls SessionService/GetSession over the
+// Connect protocol (POST, JSON body), so the session token stays out of URLs and
+// access logs. The session token is the permission: any authenticated caller with
+// it may read the session (zitadel query.SessionByID, v4.20.0).
+func (c *Client) Session(ctx context.Context, id, token string) (mfagate.Factors, error) {
+	var got struct {
+		Session struct {
+			ID      string `json:"id"`
+			Factors struct {
+				User *struct {
+					VerifiedAt string `json:"verifiedAt"`
+					ID         string `json:"id"`
+				} `json:"user"`
+				Password *factor `json:"password"`
+				WebAuthN *struct {
+					VerifiedAt   string `json:"verifiedAt"`
+					UserVerified bool   `json:"userVerified"`
+				} `json:"webAuthN"`
+				Intent       *factor `json:"intent"`
+				TOTP         *factor `json:"totp"`
+				OTPSMS       *factor `json:"otpSms"`
+				OTPEmail     *factor `json:"otpEmail"`
+				RecoveryCode *factor `json:"recoveryCode"`
+			} `json:"factors"`
+		} `json:"session"`
+	}
+	err := c.do(ctx, http.MethodPost, "/zitadel.session.v2.SessionService/GetSession", "",
+		map[string]string{"sessionId": id, "sessionToken": token}, &got)
+	var apiErr *APIError
+	// 400, 403 and 404 come from the session id or token. 401 means our own PAT
+	// failed: a config error, not a refused session.
+	if errors.As(err, &apiErr) && (apiErr.Status == http.StatusBadRequest || apiErr.Status == http.StatusForbidden || apiErr.Status == http.StatusNotFound) {
+		return mfagate.Factors{}, fmt.Errorf("%w: status %d", mfagate.ErrSessionRefused, apiErr.Status)
+	}
+	if err != nil {
+		return mfagate.Factors{}, err
+	}
+	s := got.Session.Factors
+	if got.Session.ID != id || s.User == nil || s.User.VerifiedAt == "" {
+		return mfagate.Factors{}, fmt.Errorf("%w: no verified user", mfagate.ErrSessionRefused)
+	}
+	f := mfagate.Factors{
+		UserID:       s.User.ID,
+		Password:     s.Password.ok(),
+		Intent:       s.Intent.ok(),
+		TOTP:         s.TOTP.ok(),
+		OTPSMS:       s.OTPSMS.ok(),
+		OTPEmail:     s.OTPEmail.ok(),
+		RecoveryCode: s.RecoveryCode.ok(),
+	}
+	if s.WebAuthN != nil && s.WebAuthN.VerifiedAt != "" {
+		f.WebAuthN, f.WebAuthNUserVerified = true, s.WebAuthN.UserVerified
+	}
+	return f, nil
 }
 
 func (c *Client) do(ctx context.Context, method, path, orgID string, body, out any) error {
