@@ -8,7 +8,7 @@ paths: ["internal/zitadelhook/**", "migrations/0002_zitadel_event_seen.sql", "cm
 api: []
 events: ["dev.synthwerk.identity.user.created.v1", "dev.synthwerk.identity.org.created.v1", "dev.synthwerk.identity.member.role_changed.v1"]
 mcp: []
-updated: 2026-10-28
+updated: 2026-10-29
 ---
 
 # Zitadel Action hook
@@ -25,6 +25,7 @@ updated: 2026-10-28
 - Turns `user.human.added` into `user.created`: `user_sub` = Zitadel user id, `zitadel_org_id` = resource owner, `time` = Zitadel `created_at`.
 - Stores the key `<instance>:<aggregate type>:<aggregate id>:<sequence>` and the outbox row in one transaction.
 - Never decodes or logs the `event_payload` of user events (email, names).
+- Shares its listener with the MFA gate and the token claims ([mfa-gate](mfa-gate.md), synthwerk#94). Each target has its own signing key file.
 - Mirrors user grant events (`user.grant.added|changed|removed|cascade.removed`) of project `SYNTHWERK_IDENTITY_ZITADEL_PROJECT_ID` into memberships; see [orgs-and-roles](orgs-and-roles.md). Their payload holds ids and role keys only.
 
 ## How to use
@@ -75,3 +76,4 @@ updated: 2026-10-28
 |---|---|
 | 2026-10-23 | First version (synthwerk#28 task 5). |
 | 2026-10-28 | Mirror user grant events into memberships (synthwerk#29). |
+| 2026-10-29 | The listener also serves the MFA gate (synthwerk#94). |

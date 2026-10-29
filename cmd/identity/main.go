@@ -28,6 +28,10 @@
 //	SYNTHWERK_IDENTITY_ZITADEL_PAT_FILE  file with the PAT of the machine user that manages user grants (secret).
 //	                                     Unset (or no API URL) = role changes stay in identity, Zitadel is not written.
 //	SYNTHWERK_IDENTITY_ZITADEL_PROJECT_ID  project synthwerk-api; grants of other projects are dropped.
+//	SYNTHWERK_IDENTITY_MFA_GATE_KEY_FILE      file with the signing key of the MFA gate target (secret).
+//	                                     Set = the gate listens on the hook address; it needs the Zitadel client.
+//	SYNTHWERK_IDENTITY_TOKEN_CLAIMS_KEY_FILE  file with the signing key of the pre-access-token target (secret).
+//	SYNTHWERK_IDENTITY_MFA_EVIDENCE_MAX_AGE   how long a gated sign-in gives tokens amr, default 12h.
 //	SYNTHWERK_IDENTITY_LOG_LEVEL         DEBUG, INFO (default), WARN, ERROR
 //	SYNTHWERK_IDENTITY_LOG_FORMAT        json (default) or console (local only)
 //	OTEL_EXPORTER_OTLP_ENDPOINT          collector (gRPC), for example http://telemetry:4317. Unset = no export.
@@ -64,6 +68,7 @@ import (
 
 	"github.com/VelimirMueller/synthwerk-identity/internal/app"
 	"github.com/VelimirMueller/synthwerk-identity/internal/apps"
+	"github.com/VelimirMueller/synthwerk-identity/internal/mfagate"
 	"github.com/VelimirMueller/synthwerk-identity/internal/orgs"
 	"github.com/VelimirMueller/synthwerk-identity/internal/widget"
 	"github.com/VelimirMueller/synthwerk-identity/internal/zitadel"
@@ -225,7 +230,11 @@ func run(ctx context.Context) error {
 		slog.String("server.address", srv.Addr))
 
 	servers := []*http.Server{srv}
-	if hooks := hookServer(db, store, zc, logger, source); hooks != nil {
+	hooks, err := hookServer(db, store, zc, logger, source)
+	if err != nil {
+		return err
+	}
+	if hooks != nil {
 		servers = append(servers, hooks)
 		logger.InfoContext(ctx, "zitadel hook listening",
 			slog.String("event.name", "zitadel_hook.started"),
@@ -254,26 +263,26 @@ func run(ctx context.Context) error {
 }
 
 // hookServer is the Zitadel Action listener on its own address, or nil when no
-// signing key file is set. It serves only zitadelhook.Path.
-func hookServer(db *pgxpool.Pool, store *orgs.Store, zc *zitadel.Client, logger *slog.Logger, source string) *http.Server {
+// signing key file is set. It serves zitadelhook.Path and, when their key files are
+// set, the MFA gate and the token claims (synthwerk#94).
+func hookServer(db *pgxpool.Pool, store *orgs.Store, zc *zitadel.Client, logger *slog.Logger, source string) (*http.Server, error) {
 	keyFile := env.Get(app.Service, "ZITADEL_SIGNING_KEY_FILE", "")
 	if keyFile == "" {
-		return nil
+		for _, k := range []string{"MFA_GATE_KEY_FILE", "TOKEN_CLAIMS_KEY_FILE"} {
+			if env.Get(app.Service, k, "") != "" {
+				return nil, errors.New(env.Key(app.Service, k) + " needs the hook listener (ZITADEL_SIGNING_KEY_FILE)")
+			}
+		}
+		return nil, nil
 	}
 	h := &zitadelhook.Handler{
-		Grants:    store,
-		ProjectID: env.Get(app.Service, "ZITADEL_PROJECT_ID", ""),
-		Store:     zitadelhook.Postgres{DB: db},
-		SigningKey: func() (string, error) {
-			b, err := os.ReadFile(keyFile) //nolint:gosec // G304: path from our own config
-			if err != nil {
-				return "", err
-			}
-			return strings.TrimSpace(string(b)), nil
-		},
-		Source: source,
-		Log:    logger,
-		Now:    time.Now,
+		Grants:     store,
+		ProjectID:  env.Get(app.Service, "ZITADEL_PROJECT_ID", ""),
+		Store:      zitadelhook.Postgres{DB: db},
+		SigningKey: readKey(keyFile),
+		Source:     source,
+		Log:        logger,
+		Now:        time.Now,
 	}
 	if zc != nil {
 		h.OrgName = zc.OrgName
@@ -281,6 +290,9 @@ func hookServer(db *pgxpool.Pool, store *orgs.Store, zc *zitadel.Client, logger 
 	}
 	mux := http.NewServeMux()
 	mux.Handle(zitadelhook.Path, h)
+	if err := mfaRoutes(mux, db, zc, logger); err != nil {
+		return nil, err
+	}
 	return &http.Server{
 		Addr:              env.Get(app.Service, "HOOKS_ADDR", ":8081"),
 		Handler:           kitlog.HTTP(logger, mux),
@@ -288,6 +300,43 @@ func hookServer(db *pgxpool.Pool, store *orgs.Store, zc *zitadel.Client, logger 
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       2 * time.Minute,
+	}, nil
+}
+
+// mfaRoutes adds the MFA gate and the token claims to the hook listener when their
+// key files are set. The gate reads sessions with the Zitadel client: without it,
+// identity does not start (a gate that cannot read sessions refuses every sign-in).
+func mfaRoutes(mux *http.ServeMux, db *pgxpool.Pool, zc *zitadel.Client, logger *slog.Logger) error {
+	evidence := mfagate.Postgres{DB: db}
+	if f := env.Get(app.Service, "MFA_GATE_KEY_FILE", ""); f != "" {
+		if zc == nil {
+			return errors.New(env.Key(app.Service, "MFA_GATE_KEY_FILE") + " needs the Zitadel client (ZITADEL_API_URL and ZITADEL_PAT_FILE)")
+		}
+		mux.Handle(mfagate.GatePath, &mfagate.Gate{Sessions: zc, Store: evidence, SigningKey: readKey(f), Log: logger, Now: time.Now})
+	}
+	if f := env.Get(app.Service, "TOKEN_CLAIMS_KEY_FILE", ""); f != "" {
+		maxAge := mfagate.DefaultMaxAge
+		if v := env.Get(app.Service, "MFA_EVIDENCE_MAX_AGE", ""); v != "" {
+			d, err := time.ParseDuration(v)
+			if err != nil || d <= 0 {
+				return fmt.Errorf("%s %q: want a positive duration", env.Key(app.Service, "MFA_EVIDENCE_MAX_AGE"), v)
+			}
+			maxAge = d
+		}
+		mux.Handle(mfagate.ClaimsPath, &mfagate.Claims{Store: evidence, SigningKey: readKey(f), Log: logger, Now: time.Now, MaxAge: maxAge})
+	}
+	return nil
+}
+
+// readKey returns a function that reads a target signing key per call, so a key
+// written after the start works.
+func readKey(path string) func() (string, error) {
+	return func() (string, error) {
+		b, err := os.ReadFile(path) //nolint:gosec // G304: path from our own config
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(string(b)), nil
 	}
 }
 
