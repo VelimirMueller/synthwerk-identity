@@ -242,6 +242,10 @@ func TestReconcile(t *testing.T) {
 		if _, err := plans.Reconcile(t.Context()); err == nil {
 			t.Fatal("want an error")
 		}
+		plans.Default = entitlements.Plan{Limits: entitlements.FreeDefaults}
+		if _, err := plans.Reconcile(t.Context()); err == nil || strings.Contains(err.Error(), "%!") {
+			t.Fatalf("no plan name: err %v", err)
+		}
 	})
 }
 

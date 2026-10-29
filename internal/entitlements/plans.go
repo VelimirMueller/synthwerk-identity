@@ -67,25 +67,25 @@ func FreePlan(lookup func(name string) string) (Plan, error) {
 	l := FreeDefaults
 	var errs []error
 	if v := lookup(EnvUserTokens); v != "" {
-		n, err := strconv.ParseInt(v, 10, 64)
-		if err != nil {
+		if n, err := strconv.ParseInt(v, 10, 64); err != nil {
 			errs = append(errs, fmt.Errorf("%s: not a whole number", EnvUserTokens))
+		} else {
+			l.LLMTokensPerUserPerDay = n
 		}
-		l.LLMTokensPerUserPerDay = n
 	}
 	if v := lookup(EnvOrgTokens); v != "" {
-		n, err := strconv.ParseInt(v, 10, 64)
-		if err != nil {
+		if n, err := strconv.ParseInt(v, 10, 64); err != nil {
 			errs = append(errs, fmt.Errorf("%s: not a whole number", EnvOrgTokens))
+		} else {
+			l.LLMTokensPerOrgPerDay = n
 		}
-		l.LLMTokensPerOrgPerDay = n
 	}
 	if v := lookup(EnvApps); v != "" {
-		n, err := strconv.ParseInt(v, 10, 32)
-		if err != nil {
+		if n, err := strconv.ParseInt(v, 10, 32); err != nil {
 			errs = append(errs, fmt.Errorf("%s: not a whole number", EnvApps))
+		} else {
+			l.AppsPerOrg = int32(n)
 		}
-		l.AppsPerOrg = int32(n)
 	}
 	if err := errors.Join(errs...); err != nil {
 		return Plan{}, fmt.Errorf("entitlements: free plan: %w", err)

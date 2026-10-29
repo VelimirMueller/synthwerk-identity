@@ -101,7 +101,10 @@ type Reconciled struct {
 // limits of config. Each change writes entitlements_changed. Two replicas may run
 // it at once: the insert skips existing rows, the update skips locked rows.
 func (s *Store) Reconcile(ctx context.Context) (Reconciled, error) {
-	if err := s.Default.Limits.Validate(); err != nil || s.Default.Name == "" {
+	if s.Default.Name == "" {
+		return Reconciled{}, errors.New("entitlements: default plan has no name")
+	}
+	if err := s.Default.Limits.Validate(); err != nil {
 		return Reconciled{}, fmt.Errorf("entitlements: default plan not valid: %w", err)
 	}
 	var r Reconciled
