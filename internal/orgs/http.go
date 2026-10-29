@@ -258,6 +258,8 @@ const (
 	codeLastOwner      = "last_owner"
 	codeUpstream       = "upstream_unavailable"
 	codeInternal       = "internal_error"
+	// codeOriginNotAllowed: widget token for an origin outside the allow-list (#30).
+	codeOriginNotAllowed = "origin_not_allowed"
 )
 
 var titles = map[string]string{
@@ -269,6 +271,7 @@ var titles = map[string]string{
 	codeLastOwner:            "Last owner",
 	codeUpstream:             "Upstream unavailable",
 	codeInternal:             "Internal error",
+	codeOriginNotAllowed:     "Origin not allowed",
 }
 
 type problem struct {

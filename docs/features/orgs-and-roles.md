@@ -8,7 +8,7 @@ paths: ["internal/orgs/**", "internal/zitadel/**", "internal/app/**", "migration
 api: ["GET /v1/me", "GET /v1/orgs/{orgId}", "GET /v1/orgs/{orgId}/members", "PATCH /v1/orgs/{orgId}/members/{userId}"]
 events: ["dev.synthwerk.identity.org.created.v1", "dev.synthwerk.identity.member.role_changed.v1"]
 mcp: []
-updated: 2026-10-28
+updated: 2026-10-29
 ---
 
 # Orgs and roles
@@ -80,3 +80,4 @@ updated: 2026-10-28
 |---|---|
 | 2026-10-28 | First version (synthwerk#29). |
 | 2026-10-28 | Least privilege: org name from the grant, platform org and operator refused before any Zitadel write. |
+| 2026-10-29 | The org gate and the problem writer are exported for the app routes (`internal/orgs/access.go`, synthwerk#30). |

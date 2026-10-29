@@ -1,4 +1,4 @@
-// Package app wires identity: the health probes, the org routes and the HTTP router. The layout
+// Package app wires identity: the health probes, the org and app routes and the HTTP router. The layout
 // follows synthwerk-pulse, which starts from the example service of the
 // synthwerk-contracts Go kit (go/examples/service).
 package app
@@ -18,6 +18,7 @@ import (
 	"github.com/VelimirMueller/synthwerk-contracts/go/kit/health"
 	kitlog "github.com/VelimirMueller/synthwerk-contracts/go/kit/log"
 
+	"github.com/VelimirMueller/synthwerk-identity/internal/apps"
 	"github.com/VelimirMueller/synthwerk-identity/internal/orgs"
 	"github.com/VelimirMueller/synthwerk-identity/migrations"
 )
@@ -35,6 +36,8 @@ type Config struct {
 	Verifier *auth.Verifier
 	// Orgs serves the org routes (synthwerk#29). Needs Verifier.
 	Orgs *orgs.Handler
+	// Apps serves the app routes and the widget token route (synthwerk#30). Needs Orgs.
+	Apps *apps.Handler
 	// NATS reports the bus connection for /readyz. Nil: no check.
 	NATS func(ctx context.Context) error
 }
@@ -74,6 +77,12 @@ func New(pinger Pinger, logger *slog.Logger, cfg Config) (*App, error) {
 			return nil, errors.New("app: the org routes need a token verifier")
 		}
 		cfg.Orgs.Register(mux, func(next http.Handler) http.Handler { return auth.Middleware(cfg.Verifier, next) })
+	}
+	if cfg.Apps != nil {
+		if cfg.Orgs == nil {
+			return nil, errors.New("app: the app routes need the org routes")
+		}
+		cfg.Apps.Register(mux, func(next http.Handler) http.Handler { return auth.Middleware(cfg.Verifier, next) })
 	}
 	// The log line sits inside the span. The probes create no span.
 	a.handler = otelhttp.NewHandler(kitlog.HTTP(logger, mux), Service,
