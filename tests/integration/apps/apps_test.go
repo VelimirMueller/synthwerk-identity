@@ -194,6 +194,13 @@ func TestStore(t *testing.T) {
 			t.Fatalf("%v %v", rest, err)
 		}
 	})
+	t.Run("Migration - NULL origin in the list - refused by the table check", func(t *testing.T) {
+		ctx := t.Context()
+		_, err := s.db.Exec(ctx, `INSERT INTO apps (id, org_id, name, allowed_origins) VALUES (gen_random_uuid(), $1, 'x', ARRAY['https://a.example', NULL])`, org.ID)
+		if err == nil {
+			t.Fatal("accepted")
+		}
+	})
 	t.Run("Migration - origin list longer than 20 - refused by the table check", func(t *testing.T) {
 		ctx := t.Context()
 		_, err := s.db.Exec(ctx, `INSERT INTO apps (id, org_id, name, allowed_origins) VALUES (gen_random_uuid(), $1, 'x', array_fill('https://a.example'::text, ARRAY[21]))`, org.ID)
@@ -284,7 +291,7 @@ func TestHTTP(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if p.Subject != member || p.OrgID != zorg || p.ClientID != created.ID || p.Raw[auth.ClaimOrigin] != shop || wt.ExpiresIn > 900 {
+		if p.Subject != member || p.OrgID != zorg || p.ClientID != created.ID || p.Raw[auth.ClaimOrigin] != shop || wt.ExpiresIn != 600 {
 			t.Fatalf("principal %+v, expires_in %d", p, wt.ExpiresIn)
 		}
 	})

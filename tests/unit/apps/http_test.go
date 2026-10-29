@@ -108,8 +108,12 @@ func (f *fakeApps) Create(_ context.Context, _ orgs.Org, actor, name string, ori
 	return a, nil
 }
 
-func (f *fakeApps) Update(ctx context.Context, _ orgs.Org, _, id string, _ *string, _ []string) (apps.App, error) {
-	return f.ByID(ctx, id)
+func (f *fakeApps) Update(ctx context.Context, _ orgs.Org, _, id string, _ *string, origins []string) (apps.App, error) {
+	a, err := f.ByID(ctx, id)
+	if origins != nil {
+		a.AllowedOrigins = origins
+	}
+	return a, err
 }
 
 func (f *fakeApps) Delete(ctx context.Context, _ orgs.Org, _, id string) error {
@@ -359,8 +363,9 @@ func TestAppRoutes(t *testing.T) {
 			t.Fatalf("%d", rec.Code)
 		}
 	})
-	t.Run("UpdateApp - owner, new origins - 200", func(t *testing.T) {
-		if rec := f.do(t, http.MethodPatch, list+"/"+appID, ownerTok, `{"allowed_origins":["https://www.shop.example"]}`); rec.Code != http.StatusOK {
+	t.Run("UpdateApp - owner, new origins - 200, canonical list replaces the old one", func(t *testing.T) {
+		rec := f.do(t, http.MethodPatch, list+"/"+appID, ownerTok, `{"allowed_origins":["https://WWW.shop.example:443"]}`)
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"allowed_origins":["https://www.shop.example"]`) {
 			t.Fatalf("%d %s", rec.Code, rec.Body)
 		}
 	})

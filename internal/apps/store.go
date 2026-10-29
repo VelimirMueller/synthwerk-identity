@@ -79,6 +79,10 @@ func (s *Store) Get(ctx context.Context, orgID, id string) (App, error) {
 func (s *Store) List(ctx context.Context, orgID, after string, limit int) ([]App, error) {
 	if after == "" {
 		after = uuid.Nil.String()
+	} else if id, ok := parseID(after); ok {
+		after = id
+	} else {
+		return nil, ErrNotFound
 	}
 	rows, err := s.DB.Query(ctx, `SELECT `+appCols+` FROM apps WHERE org_id = $1 AND id > $2 ORDER BY id LIMIT $3`, orgID, after, limit)
 	if err != nil {
@@ -117,7 +121,8 @@ func (s *Store) Create(ctx context.Context, org orgs.Org, actorSub, name string,
 }
 
 // Update sets the name and/or the allow-list of an app of org as actorSub. A nil
-// name or nil origins keeps the value. It writes no event yet.
+// name or nil origins keeps the value; origins is never empty (CanonicalOrigins). It
+// writes no event yet.
 func (s *Store) Update(ctx context.Context, org orgs.Org, actorSub, id string, name *string, origins []string) (App, error) {
 	id, ok := parseID(id)
 	if !ok {

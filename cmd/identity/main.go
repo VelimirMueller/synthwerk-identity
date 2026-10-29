@@ -300,7 +300,7 @@ func widgetIssuer() (*widget.Issuer, error) {
 	}
 	b, err := os.ReadFile(keyFile) //nolint:gosec // G304: path from our own config
 	if err != nil {
-		return nil, errors.New(env.Key(app.Service, "WIDGET_SIGNING_KEY_FILE") + " does not read")
+		return nil, fmt.Errorf("%s: %w", env.Key(app.Service, "WIDGET_SIGNING_KEY_FILE"), err)
 	}
 	key, err := widget.ParseKey(b)
 	if err != nil {
