@@ -48,10 +48,19 @@ type Grants interface {
 	SetRole(ctx context.Context, zitadelOrgID, userSub, grantID string, to Role) error
 }
 
+// Plans gives a new org its default plan (internal/entitlements, synthwerk#31).
+// The store calls it inside the transaction that makes the org active: an error
+// rolls the activation back.
+type Plans interface {
+	AssignDefault(ctx context.Context, tx pgx.Tx, orgID string) error
+}
+
 // Store reads and writes orgs and memberships (search_path=identity).
 type Store struct {
 	DB     DB
 	Grants Grants
+	// Plans is nil in tests that do not need entitlements.
+	Plans Plans
 	// Source is the CloudEvents source, /synthwerk/identity/<env>.
 	Source string
 }
@@ -335,6 +344,11 @@ func (s *Store) applyGrant(ctx context.Context, tx pgx.Tx, c GrantChange, orgNam
 		}
 		if err := outbox.Enqueue(ctx, tx, e); err != nil {
 			return "", err
+		}
+		if s.Plans != nil {
+			if err := s.Plans.AssignDefault(ctx, tx, org.ID); err != nil {
+				return "", err
+			}
 		}
 		return OutcomeOrgCreated, nil
 	}

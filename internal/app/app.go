@@ -1,4 +1,4 @@
-// Package app wires identity: the health probes, the org and app routes and the HTTP router. The layout
+// Package app wires identity: the health probes, the org, app and entitlement routes and the HTTP router. The layout
 // follows synthwerk-pulse, which starts from the example service of the
 // synthwerk-contracts Go kit (go/examples/service).
 package app
@@ -19,6 +19,7 @@ import (
 	kitlog "github.com/VelimirMueller/synthwerk-contracts/go/kit/log"
 
 	"github.com/VelimirMueller/synthwerk-identity/internal/apps"
+	"github.com/VelimirMueller/synthwerk-identity/internal/entitlements"
 	"github.com/VelimirMueller/synthwerk-identity/internal/orgs"
 	"github.com/VelimirMueller/synthwerk-identity/migrations"
 )
@@ -40,6 +41,8 @@ type Config struct {
 	Apps *apps.Handler
 	// NATS reports the bus connection for /readyz. Nil: no check.
 	NATS func(ctx context.Context) error
+	// Entitlements serves the entitlement routes (synthwerk#31). Needs Verifier.
+	Entitlements *entitlements.Handler
 }
 
 // Pinger checks the database connection. *pgxpool.Pool satisfies it.
@@ -72,6 +75,12 @@ func New(pinger Pinger, logger *slog.Logger, cfg Config) (*App, error) {
 
 	mux := http.NewServeMux()
 	h.Register(mux)
+	if cfg.Entitlements != nil {
+		if cfg.Verifier == nil {
+			return nil, errors.New("app: the entitlement routes need a token verifier")
+		}
+		cfg.Entitlements.Register(mux, func(next http.Handler) http.Handler { return auth.Middleware(cfg.Verifier, next) })
+	}
 	if cfg.Orgs != nil {
 		if cfg.Verifier == nil {
 			return nil, errors.New("app: the org routes need a token verifier")

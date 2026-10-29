@@ -21,7 +21,7 @@ updated: 2026-10-29
 ## What it does
 
 - Mirrors the Zitadel user grants of project `synthwerk-api` into `identity.memberships` (hook events `user.grant.added|changed|removed|cascade.removed`).
-- An org row appears with its first grant. It stays `pending` until its first owner; then it turns `active` and identity writes `org.created`.
+- An org row appears with its first grant. It stays `pending` until its first owner; then it turns `active` and identity writes `org.created` and the free plan (`docs/features/entitlements.md`) in the same transaction.
 - `PATCH /v1/orgs/{orgId}/members/{userId}` changes a role: membership, outbox row and Zitadel user grant in one transaction. Zitadel refuses: rollback, 502.
 - A grant changed directly in Zitadel updates the mirror and writes `member.role_changed` with actor `system`.
 - The outbox relay publishes to stream `EVT_IDENTITY` (`evt.identity.>`), which identity creates at start.
@@ -81,3 +81,4 @@ updated: 2026-10-29
 | 2026-10-28 | First version (synthwerk#29). |
 | 2026-10-28 | Least privilege: org name from the grant, platform org and operator refused before any Zitadel write. |
 | 2026-10-29 | The org gate and the problem writer are exported for the app routes (`internal/orgs/access.go`, synthwerk#30). |
+| 2026-10-29 | Activation also writes the free plan and `org.entitlements_changed` (synthwerk#31). |

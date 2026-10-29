@@ -32,6 +32,10 @@
 //	                                     Set = the gate listens on the hook address; it needs the Zitadel client.
 //	SYNTHWERK_IDENTITY_TOKEN_CLAIMS_KEY_FILE  file with the signing key of the pre-access-token target (secret).
 //	SYNTHWERK_IDENTITY_MFA_EVIDENCE_MAX_AGE   how long a gated sign-in gives tokens amr, default 12h.
+//	SYNTHWERK_IDENTITY_FREE_LLM_TOKENS_PER_USER_PER_DAY  free plan: LLM tokens per user per UTC day, default 50000, 0 = no limit
+//	SYNTHWERK_IDENTITY_FREE_LLM_TOKENS_PER_ORG_PER_DAY   free plan: LLM tokens per org per UTC day, default 500000, 0 = no limit
+//	SYNTHWERK_IDENTITY_FREE_APPS_PER_ORG                 free plan: apps per org, default 3, 0 = no limit
+//	                                     A change moves every free org at the next start and emits org.entitlements_changed.
 //	SYNTHWERK_IDENTITY_LOG_LEVEL         DEBUG, INFO (default), WARN, ERROR
 //	SYNTHWERK_IDENTITY_LOG_FORMAT        json (default) or console (local only)
 //	OTEL_EXPORTER_OTLP_ENDPOINT          collector (gRPC), for example http://telemetry:4317. Unset = no export.
@@ -68,6 +72,7 @@ import (
 
 	"github.com/VelimirMueller/synthwerk-identity/internal/app"
 	"github.com/VelimirMueller/synthwerk-identity/internal/apps"
+	"github.com/VelimirMueller/synthwerk-identity/internal/entitlements"
 	"github.com/VelimirMueller/synthwerk-identity/internal/mfagate"
 	"github.com/VelimirMueller/synthwerk-identity/internal/orgs"
 	"github.com/VelimirMueller/synthwerk-identity/internal/widget"
@@ -151,7 +156,12 @@ func run(ctx context.Context) error {
 		return err
 	}
 	zc := zitadelClient()
-	store := &orgs.Store{DB: db, Source: source}
+	free, err := entitlements.FreePlan(func(name string) string { return env.Get(app.Service, name, "") })
+	if err != nil {
+		return err
+	}
+	plans := &entitlements.Store{DB: db, Source: source, Default: free}
+	store := &orgs.Store{DB: db, Source: source, Plans: plans}
 	if zc != nil {
 		store.Grants = zc
 	} else {
@@ -178,6 +188,7 @@ func run(ctx context.Context) error {
 			logger.WarnContext(ctx, "no widget signing key: widget token route off", slog.String("event.name", "widget.off"))
 		}
 		appCfg.Apps = &apps.Handler{Repo: &apps.Store{DB: db, Source: source}, Orgs: appCfg.Orgs, Widget: wi, Log: logger}
+		appCfg.Entitlements = &entitlements.Handler{Orgs: store, Repo: plans, Log: logger}
 	} else {
 		logger.WarnContext(ctx, "no token issuer: org routes off", slog.String("event.name", "orgs.off"))
 	}
@@ -216,6 +227,16 @@ func run(ctx context.Context) error {
 	if err := app.Migrate(ctx, db); err != nil {
 		return err
 	}
+	// Every active org has a plan with the configured limits before the first request.
+	rec, err := plans.Reconcile(ctx)
+	if err != nil {
+		return err
+	}
+	logger.InfoContext(ctx, "entitlements reconciled", slog.String("event.name", "entitlements.reconciled"),
+		slog.Int("assigned", rec.Assigned), slog.Int("updated", rec.Updated),
+		slog.Int64("free.llm_tokens_per_user_per_day", free.Limits.LLMTokensPerUserPerDay),
+		slog.Int64("free.llm_tokens_per_org_per_day", free.Limits.LLMTokensPerOrgPerDay),
+		slog.Int("free.apps_per_org", int(free.Limits.AppsPerOrg)))
 
 	// 5. HTTP server.
 	srv := &http.Server{
