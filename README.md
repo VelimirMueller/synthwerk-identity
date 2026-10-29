@@ -19,6 +19,12 @@
 </picture>
 </p>
 
+## Status
+
+- **Decision:** the rewrite happens in this repo. No restore from `legacy-final`, no archive.
+- **Today:** rewrite in progress, epic E2 ([synthwerk#28](https://github.com/VelimirMueller/synthwerk/issues/28)). `main` holds the Go service: orgs, members, roles and the Zitadel user hook. Entitlements and the paywall are planned.
+- **Old code:** tag `legacy-final` holds the Kotlin/Quarkus prototype, for history only.
+
 <br>
 
 <p>
@@ -42,13 +48,13 @@
 <br>
 
 <p>
-<img alt="02 QUICK START. TWO FILES. BOTH ARE GOOD." src="assets/readme/divider-start-v2.svg" width="100%">
+<img alt="02 QUICK START. CLONE. TEST. RUN." src="assets/readme/divider-start-v2.svg" width="100%">
 </p>
 
 <p>
 <picture>
   <source media="(prefers-color-scheme: light)" srcset="assets/readme/start-v2-light.svg">
-  <img alt="Terminal: $ gh repo clone VelimirMueller/synthwerk-identity | $ cd synthwerk-identity | $ ls | LICENSE  README.md | # the code is the rewrite. epic E2." src="assets/readme/start-v2-dark.svg" width="100%">
+  <img alt="Terminal: $ gh repo clone VelimirMueller/synthwerk-identity | $ cd synthwerk-identity | $ just test | # unit and integration tests | # then: go run ./cmd/identity" src="assets/readme/start-v2-dark.svg" width="100%">
 </picture>
 </p>
 
@@ -58,7 +64,7 @@
 ```bash
 gh repo clone VelimirMueller/synthwerk-identity
 cd synthwerk-identity
-ls
+just test   # unit and integration tests
 ```
 
 </details>
@@ -82,11 +88,10 @@ go run ./cmd/identity  # serves :8080
 | `SYNTHWERK_IDENTITY_LOG_FORMAT` | `json` | `console` only in env `local` |
 
 Probes: `GET /healthz` (liveness) and `GET /readyz` (readiness, pings Postgres).
-
 <p>
 <picture>
   <source media="(prefers-color-scheme: light)" srcset="assets/readme/startnotes-v2-light.svg">
-  <img alt="Two files: LICENSE and README.md are the whole tree. ls shows nothing else. Nothing runs yet: No service runs from this repo yet. main carries the Synthwerk skeleton. Epic E2 Identity: The rewrite is epic E2 Identity, planned on the synthwerk map (https://github.com/VelimirMueller/synthwerk)" src="assets/readme/startnotes-v2-dark.svg" width="100%">
+  <img alt="Go on main: main holds the Go service: orgs, members, roles and the Zitadel user hook. Needs Postgres: SYNTHWERK_IDENTITY_DATABASE_URL is required. Migrations apply at startup. Epic E2 Identity: The rewrite is epic E2 Identity on the synthwerk map (https://github.com/VelimirMueller/synthwerk). It is in progress" src="assets/readme/startnotes-v2-dark.svg" width="100%">
 </picture>
 </p>
 
@@ -126,47 +131,47 @@ Probes: `GET /healthz` (liveness) and `GET /readyz` (readiness, pings Postgres).
 <p>
 <picture>
   <source media="(prefers-color-scheme: light)" srcset="assets/readme/hownotes-v2-light.svg">
-  <img alt="Clients: Clients are synthwerk-studio, synthwerk-widgets and the SDK apps. They ask, identity answers. Stack: The rewrite targets Go 1.27" src="assets/readme/hownotes-v2-dark.svg" width="100%">
+  <img alt="Clients: Clients are synthwerk-studio, synthwerk-widgets and the SDK apps. They ask, identity answers. Stack: Go 1.27" src="assets/readme/hownotes-v2-dark.svg" width="100%">
 </picture>
 </p>
 
 <br>
 
 <p>
-<img alt="04 USAGE. SHORT, LIKE THE REPO." src="assets/readme/divider-usage-v2.svg" width="100%">
+<img alt="04 USAGE. SHORT ON PURPOSE." src="assets/readme/divider-usage-v2.svg" width="100%">
 </p>
 
 <p>
 <picture>
   <source media="(prefers-color-scheme: light)" srcset="assets/readme/usage-v2-light.svg">
-  <img alt="Ecosystem map: synthwerk (https://github.com/VelimirMueller/synthwerk). One repo per role. Start there. Blueprint: Shared CI, lint configs and templates: synthwerk-blueprint (https://github.com/VelimirMueller/synthwerk-blueprint). Renamed: This repo was renamed. The old URL still redirects here. Legacy code: The tag legacy-final keeps the old service: a Kotlin/Quarkus prototype with hard-coded users and no tokens. Branching: When the code returns: main deploys to dev, a vX.Y.Z tag to stg, an approved digest to prd. License: MIT. Copyright 2025 Velimir Müller" src="assets/readme/usage-v2-dark.svg" width="100%">
+  <img alt="Ecosystem map: synthwerk (https://github.com/VelimirMueller/synthwerk). One repo per role. Start there. Blueprint: Shared CI, lint configs and templates: synthwerk-blueprint (https://github.com/VelimirMueller/synthwerk-blueprint). Renamed: This repo was renamed. The old URL still redirects here. Legacy code: The tag legacy-final keeps the old service: a Kotlin/Quarkus prototype with hard-coded users and no tokens. Branching: main deploys to dev, a vX.Y.Z tag to stg, an approved digest to prd. License: MIT. Copyright 2025 Velimir Müller" src="assets/readme/usage-v2-dark.svg" width="100%">
 </picture>
 </p>
 
 <br>
 
 <p>
-<img alt="05 STATUS. MOSTLY PLANS. CLEARLY LABELLED." src="assets/readme/divider-status-v2.svg" width="100%">
+<img alt="05 STATUS. HALF BUILT. CLEARLY LABELLED." src="assets/readme/divider-status-v2.svg" width="100%">
 </p>
 
 <p>
 <picture>
   <source media="(prefers-color-scheme: light)" srcset="assets/readme/status-v2-light.svg">
-  <img alt="Rewrite (epic E2 Identity): planned. main branch: skeleton, no code. legacy-final tag: Kotlin/Quarkus prototype. Login: Zitadel v4: OIDC, passkeys, MFA. Branching: dev, stg by tag, prd by digest" src="assets/readme/status-v2-dark.svg" width="100%">
+  <img alt="Rewrite (epic E2 Identity): in progress. Orgs, members, roles: on main. Zitadel user hook: on main. Entitlements, paywall: planned. legacy-final tag: Kotlin/Quarkus prototype" src="assets/readme/status-v2-dark.svg" width="100%">
 </picture>
 </p>
 
 <p>
 <picture>
   <source media="(prefers-color-scheme: light)" srcset="assets/readme/statuslog-v2-light.svg">
-  <img alt="[ STATUS ]: Rewrite planned, epic E2 identity. [ WORKS ]: The README. The LICENSE. [ NEXT ]: The service itself, in Go" src="assets/readme/statuslog-v2-dark.svg" width="100%">
+  <img alt="[ STATUS ]: Rewrite in progress, epic E2 identity. [ WORKS ]: Orgs, members, roles. The Zitadel user hook. [ NEXT ]: Entitlements and the paywall" src="assets/readme/statuslog-v2-dark.svg" width="100%">
 </picture>
 </p>
 
 <p>
 <picture>
   <source media="(prefers-color-scheme: light)" srcset="assets/readme/honest-v2-light.svg">
-  <img alt="Tests: No test command yet. There is no code to test. Changelog: No CHANGELOG yet. Numbers later: When the rewrite lands, this section gets honest numbers" src="assets/readme/honest-v2-dark.svg" width="100%">
+  <img alt="Tests: just test runs unit and integration tests. Changelog: No CHANGELOG yet. Numbers later: Coverage and latency numbers come with the first release" src="assets/readme/honest-v2-dark.svg" width="100%">
 </picture>
 </p>
 
