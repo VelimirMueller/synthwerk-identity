@@ -8,6 +8,7 @@ package apps
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -26,6 +27,7 @@ type App struct {
 	OrgID          string
 	Name           string
 	AllowedOrigins []string
+	WidgetSettings WidgetSettings
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 }
@@ -36,7 +38,18 @@ var (
 	ErrNotFound = errors.New("apps: not found")
 	// ErrForbidden: the stored role of the caller is not owner or admin (403).
 	ErrForbidden = errors.New("apps: forbidden")
+	// ErrLimitReached: the org has apps_per_org apps already (403
+	// app_limit_reached). The error is a LimitError.
+	ErrLimitReached = errors.New("apps: app limit reached")
 )
+
+// LimitError is the refusal of a create past the apps_per_org limit.
+type LimitError struct{ Limit int32 }
+
+func (e LimitError) Error() string { return fmt.Sprintf("apps: the plan allows %d apps", e.Limit) }
+
+// Is makes errors.Is(err, ErrLimitReached) true.
+func (LimitError) Is(target error) bool { return target == ErrLimitReached }
 
 // Store reads and writes apps (search_path=identity).
 type Store struct {
@@ -45,14 +58,16 @@ type Store struct {
 	Source string
 }
 
-const appCols = `id::text, org_id::text, name, allowed_origins, created_at, updated_at`
+const appCols = `id::text, org_id::text, name, allowed_origins, widget_settings, created_at, updated_at`
 
 func scanApp(row pgx.Row) (App, error) {
 	var a App
-	err := row.Scan(&a.ID, &a.OrgID, &a.Name, &a.AllowedOrigins, &a.CreatedAt, &a.UpdatedAt)
+	var settings []byte
+	err := row.Scan(&a.ID, &a.OrgID, &a.Name, &a.AllowedOrigins, &settings, &a.CreatedAt, &a.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return App{}, ErrNotFound
 	}
+	a.WidgetSettings = readSettings(settings)
 	return a, err
 }
 
@@ -92,7 +107,9 @@ func (s *Store) List(ctx context.Context, orgID, after string, limit int) ([]App
 }
 
 // Create adds an app to org as actorSub and writes app.created in the same
-// transaction. origins must be canonical (CanonicalOrigins).
+// transaction. origins must be canonical (CanonicalOrigins). The app gets the
+// default widget settings. Past the apps_per_org limit of the org it returns a
+// LimitError (synthwerk#38).
 func (s *Store) Create(ctx context.Context, org orgs.Org, actorSub, name string, origins []string) (App, error) {
 	tx, err := s.DB.Begin(ctx)
 	if err != nil {
@@ -100,6 +117,9 @@ func (s *Store) Create(ctx context.Context, org orgs.Org, actorSub, name string,
 	}
 	defer func() { _ = tx.Rollback(ctx) }() // no-op after Commit
 	if err := requireAdmin(ctx, tx, org.ID, actorSub); err != nil {
+		return App{}, err
+	}
+	if err := checkLimit(ctx, tx, org.ID); err != nil {
 		return App{}, err
 	}
 	a, err := scanApp(tx.QueryRow(ctx, `INSERT INTO apps (id, org_id, name, allowed_origins) VALUES ($1, $2, $3, $4) RETURNING `+appCols,
@@ -120,10 +140,16 @@ func (s *Store) Create(ctx context.Context, org orgs.Org, actorSub, name string,
 	return a, nil
 }
 
-// Update sets the name and/or the allow-list of an app of org as actorSub. A nil
-// name or nil origins keeps the value; origins is never empty (CanonicalOrigins). It
-// writes no event yet.
-func (s *Store) Update(ctx context.Context, org orgs.Org, actorSub, id string, name *string, origins []string) (App, error) {
+// Change is what Update sets. A nil field keeps its value. Origins is never
+// empty (CanonicalOrigins); Settings replace the old settings as a whole.
+type Change struct {
+	Name     *string
+	Origins  []string
+	Settings *WidgetSettings
+}
+
+// Update changes an app of org as actorSub. It writes no event yet.
+func (s *Store) Update(ctx context.Context, org orgs.Org, actorSub, id string, c Change) (App, error) {
 	id, ok := parseID(id)
 	if !ok {
 		return App{}, ErrNotFound
@@ -136,8 +162,17 @@ func (s *Store) Update(ctx context.Context, org orgs.Org, actorSub, id string, n
 	if err := requireAdmin(ctx, tx, org.ID, actorSub); err != nil {
 		return App{}, err
 	}
-	a, err := scanApp(tx.QueryRow(ctx, `UPDATE apps SET name = coalesce($3, name), allowed_origins = coalesce($4, allowed_origins), updated_at = now()
-		WHERE org_id = $1 AND id = $2 RETURNING `+appCols, org.ID, id, name, origins))
+	var settings any // NULL keeps the stored settings
+	if c.Settings != nil {
+		b, err := json.Marshal(c.Settings)
+		if err != nil {
+			return App{}, fmt.Errorf("apps: settings: %w", err)
+		}
+		settings = string(b)
+	}
+	a, err := scanApp(tx.QueryRow(ctx, `UPDATE apps SET name = coalesce($3, name), allowed_origins = coalesce($4, allowed_origins),
+		widget_settings = coalesce($5::jsonb, widget_settings), updated_at = now()
+		WHERE org_id = $1 AND id = $2 RETURNING `+appCols, org.ID, id, c.Name, c.Origins, settings))
 	if err != nil {
 		return App{}, err
 	}
@@ -182,6 +217,32 @@ func parseID(id string) (string, bool) {
 		return "", false
 	}
 	return u.String(), true
+}
+
+// checkLimit refuses one more app past apps_per_org (0 = no limit). It locks the
+// entitlements row of the org until the end of tx, so two parallel creates
+// count one after the other. An active org always has a row (entitlements
+// Reconcile, AssignDefault); a missing row is an error, never "no limit".
+func checkLimit(ctx context.Context, tx pgx.Tx, orgID string) error {
+	var limit int32
+	err := tx.QueryRow(ctx, `SELECT apps_per_org FROM org_entitlements WHERE org_id = $1 FOR UPDATE`, orgID).Scan(&limit)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return errors.New("apps: the org has no entitlements")
+	}
+	if err != nil {
+		return fmt.Errorf("apps: app limit: %w", err)
+	}
+	if limit == 0 {
+		return nil
+	}
+	var n int64
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM apps WHERE org_id = $1`, orgID).Scan(&n); err != nil {
+		return fmt.Errorf("apps: app count: %w", err)
+	}
+	if n >= int64(limit) {
+		return LimitError{Limit: limit}
+	}
+	return nil
 }
 
 // requireAdmin checks the stored role of sub in org and holds a share lock on the

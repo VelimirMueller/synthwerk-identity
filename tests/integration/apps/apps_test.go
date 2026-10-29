@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -25,6 +26,7 @@ import (
 
 	"github.com/VelimirMueller/synthwerk-identity/internal/app"
 	"github.com/VelimirMueller/synthwerk-identity/internal/apps"
+	"github.com/VelimirMueller/synthwerk-identity/internal/entitlements"
 	"github.com/VelimirMueller/synthwerk-identity/internal/orgs"
 	"github.com/VelimirMueller/synthwerk-identity/internal/widget"
 	"github.com/VelimirMueller/synthwerk-identity/tests/support/containers"
@@ -69,8 +71,10 @@ func setup(t *testing.T) stores {
 			t.Fatal(err)
 		}
 	}
+	plans := &entitlements.Store{DB: db, Source: "/synthwerk/identity/dev",
+		Default: entitlements.Plan{Name: entitlements.Free, Limits: entitlements.FreeDefaults}}
 	return stores{
-		orgs: &orgs.Store{DB: db, Source: "/synthwerk/identity/dev"},
+		orgs: &orgs.Store{DB: db, Source: "/synthwerk/identity/dev", Plans: plans},
 		apps: &apps.Store{DB: db, Source: "/synthwerk/identity/dev"},
 		db:   db,
 	}
@@ -156,11 +160,11 @@ func TestStore(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		u, err := s.apps.Update(ctx, org, admin, a.ID, nil, []string{"https://docs.example", shop})
+		u, err := s.apps.Update(ctx, org, admin, a.ID, apps.Change{Origins: []string{"https://docs.example", shop}})
 		if err != nil || u.Name != "Docs" || len(u.AllowedOrigins) != 2 || !u.UpdatedAt.After(a.UpdatedAt) {
 			t.Fatalf("%+v %v", u, err)
 		}
-		if _, err := s.apps.Update(ctx, other, outsider, a.ID, nil, []string{shop}); !errors.Is(err, apps.ErrNotFound) {
+		if _, err := s.apps.Update(ctx, other, outsider, a.ID, apps.Change{Origins: []string{shop}}); !errors.Is(err, apps.ErrNotFound) {
 			t.Fatalf("other org err %v", err)
 		}
 		if _, err := s.apps.Get(ctx, other.ID, a.ID); !errors.Is(err, apps.ErrNotFound) {
@@ -352,6 +356,163 @@ func TestHTTP(t *testing.T) {
 		}
 		if st, _ := call(t, http.MethodPost, tokens, tok(member, zorg, "member"), "http://localhost:3000", ""); st != http.StatusNotFound {
 			t.Fatalf("%d", st)
+		}
+	})
+}
+
+func TestLimitAndSettings(t *testing.T) {
+	s := setup(t)
+	org, other := seed(t, s)
+	setLimit := func(t *testing.T, orgID string, n int) {
+		t.Helper()
+		if _, err := s.db.Exec(t.Context(), `UPDATE org_entitlements SET apps_per_org = $2 WHERE org_id = $1`, orgID, n); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("Create - org at apps_per_org - LimitError, no row, no event", func(t *testing.T) {
+		ctx := t.Context()
+		setLimit(t, org.ID, 1)
+		if _, err := s.apps.Create(ctx, org, owner, "One", []string{shop}); err != nil {
+			t.Fatal(err)
+		}
+		before := count(t, s.db, `SELECT count(*) FROM synthwerk_outbox WHERE event->>'type' = $1`, apps.AppCreated)
+		_, err := s.apps.Create(ctx, org, owner, "Two", []string{shop})
+		var le apps.LimitError
+		if !errors.As(err, &le) || le.Limit != 1 || !errors.Is(err, apps.ErrLimitReached) {
+			t.Fatalf("err %v", err)
+		}
+		if count(t, s.db, `SELECT count(*) FROM apps WHERE org_id = $1`, org.ID) != 1 ||
+			count(t, s.db, `SELECT count(*) FROM synthwerk_outbox WHERE event->>'type' = $1`, apps.AppCreated) != before {
+			t.Fatal("row or event written")
+		}
+	})
+	t.Run("Create - limit 0 - no limit", func(t *testing.T) {
+		ctx := t.Context()
+		setLimit(t, org.ID, 0)
+		if _, err := s.apps.Create(ctx, org, owner, "Two", []string{shop}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("Create - eight parallel creates, one slot left - exactly one app made", func(t *testing.T) {
+		ctx := t.Context()
+		setLimit(t, other.ID, 1)
+		var wg sync.WaitGroup
+		var mu sync.Mutex
+		ok, limited := 0, 0
+		for i := range 8 {
+			wg.Go(func() {
+				_, err := s.apps.Create(ctx, other, outsider, fmt.Sprintf("P%d", i), []string{shop})
+				mu.Lock()
+				defer mu.Unlock()
+				switch {
+				case err == nil:
+					ok++
+				case errors.Is(err, apps.ErrLimitReached):
+					limited++
+				default:
+					t.Errorf("err %v", err)
+				}
+			})
+		}
+		wg.Wait()
+		if ok != 1 || limited != 7 || count(t, s.db, `SELECT count(*) FROM apps WHERE org_id = $1`, other.ID) != 1 {
+			t.Fatalf("ok %d, limited %d", ok, limited)
+		}
+	})
+	t.Run("Create - org without an entitlements row - error, never no limit", func(t *testing.T) {
+		ctx := t.Context()
+		if _, err := s.db.Exec(ctx, `DELETE FROM org_entitlements WHERE org_id = $1`, org.ID); err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if _, err := s.db.Exec(ctx, `INSERT INTO org_entitlements (org_id, plan, llm_tokens_per_user_per_day, llm_tokens_per_org_per_day, apps_per_org)
+				VALUES ($1, 'free', 1, 1, 0)`, org.ID); err != nil {
+				t.Fatal(err)
+			}
+		}()
+		_, err := s.apps.Create(ctx, org, owner, "X", []string{shop})
+		if err == nil || errors.Is(err, apps.ErrLimitReached) {
+			t.Fatalf("err %v", err)
+		}
+	})
+	t.Run("Settings - new app defaults, update replaces them, row from before 0007 reads as defaults", func(t *testing.T) {
+		ctx := t.Context()
+		a, err := s.apps.Create(ctx, org, owner, "Look", []string{shop})
+		if err != nil || a.WidgetSettings != apps.DefaultWidgetSettings() {
+			t.Fatalf("%+v %v", a.WidgetSettings, err)
+		}
+		want := apps.WidgetSettings{Position: "bottom-left", Theme: "contrast", Mode: "dark", Lang: "de", Accent: "venture", Greeting: "Hallo"}
+		u, err := s.apps.Update(ctx, org, owner, a.ID, apps.Change{Settings: &want})
+		if err != nil || u.WidgetSettings != want || u.Name != "Look" {
+			t.Fatalf("%+v %v", u, err)
+		}
+		n := "Renamed"
+		u, err = s.apps.Update(ctx, org, owner, a.ID, apps.Change{Name: &n})
+		if err != nil || u.WidgetSettings != want {
+			t.Fatalf("settings lost on rename: %+v %v", u, err)
+		}
+		if _, err := s.db.Exec(ctx, `UPDATE apps SET widget_settings = '{"mode":"neon","greeting":"Hi"}' WHERE id = $1`, a.ID); err != nil {
+			t.Fatal(err)
+		}
+		g, err := s.apps.ByID(ctx, a.ID)
+		d := apps.DefaultWidgetSettings()
+		d.Greeting = "Hi"
+		if err != nil || g.WidgetSettings != d {
+			t.Fatalf("%+v %v", g.WidgetSettings, err)
+		}
+	})
+	t.Run("Migration - widget_settings not an object - refused by the table check", func(t *testing.T) {
+		ctx := t.Context()
+		if _, err := s.db.Exec(ctx, `UPDATE apps SET widget_settings = '[]' WHERE org_id = $1`, org.ID); err == nil {
+			t.Fatal("accepted")
+		}
+	})
+}
+
+func TestPublicWidgetSettings(t *testing.T) {
+	s := setup(t)
+	org, _ := seed(t, s)
+	srv, _ := server(t, s)
+	a, err := s.apps.Create(t.Context(), org, owner, "Shop", []string{shop})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := apps.WidgetSettings{Position: "bottom-left", Theme: "default", Mode: "light", Lang: "en", Accent: "ops", Greeting: "Hi there"}
+	if _, err := s.apps.Update(t.Context(), org, owner, a.ID, apps.Change{Settings: &want}); err != nil {
+		t.Fatal(err)
+	}
+	url := srv.URL + "/v1/apps/" + a.ID + "/widget-settings"
+
+	get := func(t *testing.T, origin string) (int, http.Header, string) {
+		t.Helper()
+		req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = res.Body.Close() }()
+		b, _ := io.ReadAll(res.Body)
+		return res.StatusCode, res.Header, string(b)
+	}
+	t.Run("GetWidgetSettings - listed origin, no token - 200 stored settings, CORS, Vary, no-cache", func(t *testing.T) {
+		status, h, body := get(t, shop)
+		if status != http.StatusOK || h.Get("Access-Control-Allow-Origin") != shop ||
+			h.Get("Vary") != "Origin" || h.Get("Cache-Control") != "no-cache" {
+			t.Fatalf("%d %v %s", status, h, body)
+		}
+		if !strings.Contains(body, `"accent":"ops"`) || !strings.Contains(body, `"greeting":"Hi there"`) || strings.Contains(body, "Shop") {
+			t.Fatalf("body %s", body)
+		}
+	})
+	t.Run("GetWidgetSettings - other origin - 403 no-store, Vary, no CORS header", func(t *testing.T) {
+		status, h, body := get(t, "https://evil.test")
+		if status != http.StatusForbidden || h.Get("Access-Control-Allow-Origin") != "" ||
+			h.Get("Vary") != "Origin" || h.Get("Cache-Control") != "no-store" || strings.Contains(body, "ops") {
+			t.Fatalf("%d %v %s", status, h, body)
 		}
 	})
 }

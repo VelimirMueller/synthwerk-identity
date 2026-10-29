@@ -260,6 +260,8 @@ const (
 	codeInternal       = "internal_error"
 	// codeOriginNotAllowed: widget token for an origin outside the allow-list (#30).
 	codeOriginNotAllowed = "origin_not_allowed"
+	// codeAppLimitReached: the org has apps_per_org apps already (#38).
+	codeAppLimitReached = "app_limit_reached"
 )
 
 var titles = map[string]string{
@@ -272,6 +274,7 @@ var titles = map[string]string{
 	codeUpstream:             "Upstream unavailable",
 	codeInternal:             "Internal error",
 	codeOriginNotAllowed:     "Origin not allowed",
+	codeAppLimitReached:      "App limit reached",
 }
 
 type problem struct {
