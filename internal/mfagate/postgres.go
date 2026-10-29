@@ -15,7 +15,7 @@ type DB interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
-// Postgres stores evidence in identity.mfa_evidence (migration 0004).
+// Postgres stores evidence in identity.mfa_evidence (migration 0005).
 type Postgres struct{ DB DB }
 
 // Record implements Store: one row per user, a newer check replaces an older one.

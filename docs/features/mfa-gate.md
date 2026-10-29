@@ -4,7 +4,7 @@ slug: mfa-gate
 status: beta
 epic: E2
 owner: identity
-paths: ["internal/mfagate/**", "internal/zitadel/client.go", "migrations/0004_mfa_evidence.sql", "cmd/identity/main.go"]
+paths: ["internal/mfagate/**", "internal/zitadel/client.go", "migrations/0005_mfa_evidence.sql", "cmd/identity/main.go"]
 api: []
 events: []
 mcp: []
