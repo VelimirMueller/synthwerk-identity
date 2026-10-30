@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -79,6 +80,9 @@ type fakeApps struct {
 	created  int
 	limit    int32 // > 0: Create refuses with a LimitError
 	settings *apps.WidgetSettings
+	// lookups holds the origins OriginListed got; lookupErr makes it fail.
+	lookups   []string
+	lookupErr error
 }
 
 func (f *fakeApps) app() apps.App {
@@ -134,6 +138,14 @@ func (f *fakeApps) Update(ctx context.Context, _ orgs.Org, _, id string, c apps.
 func (f *fakeApps) Delete(ctx context.Context, _ orgs.Org, _, id string) error {
 	_, err := f.ByID(ctx, id)
 	return err
+}
+
+func (f *fakeApps) OriginListed(_ context.Context, origin string) (bool, error) {
+	f.lookups = append(f.lookups, origin)
+	if f.lookupErr != nil {
+		return false, f.lookupErr
+	}
+	return slices.Contains(f.app().AllowedOrigins, origin), nil
 }
 
 type pinger struct{}

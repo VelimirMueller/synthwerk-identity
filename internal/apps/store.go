@@ -213,6 +213,17 @@ func (s *Store) Delete(ctx context.Context, org orgs.Org, actorSub, id string) e
 	return nil
 }
 
+// OriginListed reports whether an app of an active org lists origin in its
+// allow-list. origin must be canonical (CanonicalOrigin). The @> compare uses
+// the GIN index apps_allowed_origins (migration 0010).
+func (s *Store) OriginListed(ctx context.Context, origin string) (bool, error) {
+	var listed bool
+	err := s.DB.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1 FROM apps a JOIN orgs o ON o.id = a.org_id
+		WHERE a.allowed_origins @> ARRAY[$1::text] AND o.status = 'active')`, origin).Scan(&listed)
+	return listed, err
+}
+
 // parseID returns id in the canonical UUID form. uuid.Parse also takes forms that
 // Postgres refuses ("urn:uuid:…"), so the store always passes the canonical form.
 func parseID(id string) (string, bool) {

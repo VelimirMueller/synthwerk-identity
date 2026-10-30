@@ -30,6 +30,7 @@ type Repo interface {
 	Create(ctx context.Context, org orgs.Org, actorSub, name string, origins []string) (App, error)
 	Update(ctx context.Context, org orgs.Org, actorSub, id string, c Change) (App, error)
 	Delete(ctx context.Context, org orgs.Org, actorSub, id string) error
+	OriginListed(ctx context.Context, origin string) (bool, error)
 }
 
 // Handler serves the app routes and the widget token route of openapi/identity.
@@ -62,6 +63,9 @@ func (h *Handler) Register(mux *http.ServeMux, authn func(http.Handler) http.Han
 	// Public: a signed-out visitor's widget reads its look (synthwerk#38, widgets#34).
 	mux.Handle("GET /v1/apps/{appId}/widget-settings", h.cors(http.HandlerFunc(h.getWidgetSettings)))
 	mux.Handle("OPTIONS /v1/apps/{appId}/widget-settings", h.cors(preflight(http.MethodGet, "")))
+	// Internal, no token: llm asks it for the CORS answer of the widget chat
+	// routes (infra#21). The edge refuses /identity/internal/*.
+	mux.HandleFunc("GET "+WidgetOriginsPath, h.widgetOrigin)
 	if h.Widget != nil {
 		mux.Handle("POST /v1/apps/{appId}/widget-tokens", h.cors(authn(http.HandlerFunc(h.createWidgetToken))))
 		mux.Handle("OPTIONS /v1/apps/{appId}/widget-tokens", h.cors(preflight(http.MethodPost, "Authorization, Content-Type")))
