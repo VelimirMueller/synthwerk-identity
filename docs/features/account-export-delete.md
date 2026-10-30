@@ -21,7 +21,7 @@ updated: 2026-10-30
 
 - Export: the memberships of the caller in every org (org id, name, slug, role, joined, updated) and the newest MFA evidence (session id, `amr`, time; never a session token).
 - Export: asks every source of `SYNTHWERK_IDENTITY_EXPORT_SOURCES` at `GET /v1/me/export` with the caller's own access token, and puts each answer unchanged into `services[].data`. A source that fails gives `status: unavailable` and `complete: false`; the answer stays 200.
-- Delete, in one transaction: a row in `account_deletions` (key sha256 of the sub), the memberships, the MFA evidence, the seen keys of the user's Zitadel events, the orgs where the user is the only member (with their apps and plan), and the outbox row of `user.deleted.v1`.
+- Delete, in one transaction: a row in `account_deletions` (key sha256 of the sub), the memberships, the MFA evidence, the seen keys of the user's Zitadel events, the orgs where the user is the only member (with their apps, plan, invitations and audit rows), the invitations of the user (as invitee by sub or verified email, and as inviter), and the outbox row of `user.deleted.v1`. Audit rows of other orgs stay, but name `deleted-user`: actor `user:deleted-user`, subject and `data.user_sub` / `data.owner_sub` `deleted-user` (synthwerk#37).
 - Remover: every 30 s it removes the Zitadel user of each new deletion (UserService v2 `DeleteUser`). Failure: retry after 1, 2, 4 … 60 minutes. Success: the clear sub leaves `account_deletions`; only the hash stays.
 - The Zitadel hook drops a grant event of a deleted user (hash lookup), so a late event never brings a membership back.
 
@@ -44,6 +44,7 @@ updated: 2026-10-30
 | Export source | 10 s timeout, 32 MiB, `application/json` object, status 200. No redirects: the token goes only to the configured host. |
 | Export source config | `name=url` list. http(s) URL without user info, query or fragment. A bad value stops the start. |
 | Logs | `enduser.id` and reason. Never a token, never export content. |
+| Invitations by email | Only the token `email` when `email_verified` is true. Without it, an invitation the user got by email only stays until the inviter revokes it. |
 | Bus retention | `EVT_IDENTITY` keeps older events with the sub up to 30 days; published outbox rows go after the kit retention. |
 
 ## Events
@@ -64,6 +65,7 @@ updated: 2026-10-30
 
 ## Tests
 
+- `tests/integration/account/account_test.go` — `Delete - invitations and audit rows - own invitations gone, audit rows pseudonymised, closed org's rows gone`
 - `tests/unit/account/http_test.go` — `DeleteMe - token with mfa, gated sign-in 5 min old - 202 with the closed org`
 - `tests/unit/account/http_test.go` — `DeleteMe - token without amr mfa / no gated sign-in stored / gated sign-in 16 min old / evidence from the future / evidence without mfa - 403 recent_mfa_required, nothing deleted`
 - `tests/unit/account/http_test.go` — `DeleteMe - operator - 403 forbidden`; `last owner of an org with members - 409 last_owner naming the org`; `repeat with the old token - 202 with the first time`
@@ -81,3 +83,4 @@ updated: 2026-10-30
 | Date | Change |
 |---|---|
 | 2026-10-30 | First version (synthwerk#41). |
+| 2026-10-30 | Delete also removes the user's invitations and pseudonymises the user in audit rows (synthwerk#37 merge). |

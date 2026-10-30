@@ -44,7 +44,9 @@ updated: 2026-10-30
 | `member.invited`, `member.invite_revoked` | Invitation id and role only: the same for a new email and for a user of another org |
 | Events | `org.created`, `member.invited`, `member.invite_revoked`, `member.role_changed`, `member.deactivated`, `member.reactivated`, `app.created`, `org.entitlements_changed`, and later org events of identity |
 | Refusals | Not listed: a refused change writes no event |
-| Retention | No end yet. Delete per user (#41) is open |
+| Org delete | The audit rows go with the org (`ON DELETE CASCADE`) |
+| Account delete (#41) | Rows of other orgs stay; the user becomes `deleted-user` in `actor`, `subject`, `data.user_sub` and `data.owner_sub` |
+| Retention | No end yet (follow-up) |
 
 ## Errors
 

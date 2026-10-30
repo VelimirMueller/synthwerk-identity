@@ -47,7 +47,7 @@ func (f *fakeRepo) Deleted(context.Context, string) (account.Deletion, bool, err
 	return *f.deleted, true, f.err
 }
 
-func (f *fakeRepo) Delete(_ context.Context, s string) (account.Deletion, error) {
+func (f *fakeRepo) Delete(_ context.Context, s string, _ ...string) (account.Deletion, error) {
 	f.calls++
 	if f.deleteErr != nil {
 		return account.Deletion{}, f.deleteErr

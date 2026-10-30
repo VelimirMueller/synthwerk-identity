@@ -119,9 +119,15 @@ type lockedOrg struct {
 	others, otherOwners         int
 }
 
+// DeletedUser replaces the user in the audit rows of a deleted account: the actor
+// becomes "user:deleted-user", the subject and data.user_sub / data.owner_sub
+// "deleted-user". The org keeps the history, not the person (synthwerk#37, #41).
+const DeletedUser = "deleted-user"
+
 // Delete deletes the identity rows of sub and writes user.deleted in one
-// transaction. A deleted account gives the first deletion with Repeat true.
-func (s *Store) Delete(ctx context.Context, sub string) (Deletion, error) {
+// transaction. emails are the verified emails of sub: their invitations go too.
+// A deleted account gives the first deletion with Repeat true.
+func (s *Store) Delete(ctx context.Context, sub string, emails ...string) (Deletion, error) {
 	tx, err := s.DB.Begin(ctx)
 	if err != nil {
 		return Deletion{}, fmt.Errorf("account: begin: %w", err)
@@ -176,6 +182,9 @@ func (s *Store) Delete(ctx context.Context, sub string) (Deletion, error) {
 		if _, err := tx.Exec(ctx, q, sub); err != nil {
 			return Deletion{}, fmt.Errorf("account: delete rows: %w", err)
 		}
+	}
+	if err := erasePersonal(ctx, tx, sub, emails); err != nil {
+		return Deletion{}, err
 	}
 	e, err := userDeleted(ctx, s.Source, sub, deleted)
 	if err != nil {
@@ -242,4 +251,29 @@ func lockOrgs(ctx context.Context, tx pgx.Tx, sub string) ([]lockedOrg, error) {
 		}
 	}
 	return slices.Clip(out), nil
+}
+
+// erasePersonal deletes the invitations of sub (as invitee by sub or email, and
+// as inviter) and pseudonymises the audit rows that name sub. Rows of closed orgs
+// went with the org (ON DELETE CASCADE).
+func erasePersonal(ctx context.Context, tx pgx.Tx, sub string, emails []string) error {
+	if emails == nil {
+		emails = []string{}
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM invitations
+		WHERE user_sub = $1 OR invited_by = $1 OR lower(email) = ANY(SELECT lower(e) FROM unnest($2::text[]) e)`,
+		sub, emails); err != nil {
+		return fmt.Errorf("account: delete invitations: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE audit_events SET
+			actor   = CASE WHEN actor = 'user:' || $1 THEN 'user:' || $2 ELSE actor END,
+			subject = CASE WHEN subject = $1 THEN $2 ELSE subject END,
+			data    = data
+				|| CASE WHEN data->>'user_sub' = $1 THEN jsonb_build_object('user_sub', $2::text) ELSE '{}'::jsonb END
+				|| CASE WHEN data->>'owner_sub' = $1 THEN jsonb_build_object('owner_sub', $2::text) ELSE '{}'::jsonb END
+		WHERE actor = 'user:' || $1 OR subject = $1 OR data->>'user_sub' = $1 OR data->>'owner_sub' = $1`,
+		sub, DeletedUser); err != nil {
+		return fmt.Errorf("account: pseudonymise audit: %w", err)
+	}
+	return nil
 }

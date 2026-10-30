@@ -59,7 +59,8 @@ $$;
 CREATE TABLE IF NOT EXISTS identity.audit_events (
     seq         bigint      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     id          uuid        NOT NULL UNIQUE,
-    org_id      uuid        NOT NULL,
+    -- An org delete (also an account delete that closes the org) removes its rows.
+    org_id      uuid        NOT NULL REFERENCES identity.orgs (id) ON DELETE CASCADE,
     type        text        NOT NULL,
     actor       text        NOT NULL,
     subject     text,
@@ -68,6 +69,17 @@ CREATE TABLE IF NOT EXISTS identity.audit_events (
     recorded_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS audit_events_org_seq ON identity.audit_events (org_id, seq DESC);
+-- A table made by an earlier run of this file has no foreign key yet.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'audit_events_org_id_fkey'
+                   AND conrelid = 'identity.audit_events'::regclass) THEN
+        DELETE FROM identity.audit_events a WHERE NOT EXISTS (SELECT 1 FROM identity.orgs o WHERE o.id = a.org_id);
+        ALTER TABLE identity.audit_events ADD CONSTRAINT audit_events_org_id_fkey
+            FOREIGN KEY (org_id) REFERENCES identity.orgs (id) ON DELETE CASCADE;
+    END IF;
+END;
+$$;
 
 -- Copies an outbox row into audit_events when it is an identity event of a known
 -- org. It runs in the transaction of the change: no change without its audit row.
