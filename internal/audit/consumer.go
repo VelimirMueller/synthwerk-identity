@@ -117,7 +117,7 @@ func (w *Writer) Record(ctx context.Context, c Entry) (bool, error) {
 // ConsumerConfig of a consumer. Zero values take the defaults.
 type ConsumerConfig struct {
 	// AckWait is how long JetStream waits for the ack before it sends the event
-	// again. Default 30 s. One insert gets AckWait minus 5 s.
+	// again. Default 30 s. One insert gets AckWait minus 5 s, at least half of AckWait.
 	AckWait time.Duration
 	// RetryMin and RetryMax bound the backoff of a Nak and of the wait for the
 	// stream. Default 1 s and 1 min.

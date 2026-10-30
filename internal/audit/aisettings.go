@@ -165,7 +165,7 @@ func (d aiSettingsData) check() error {
 	return nil
 }
 
-// canonical encodes the checked fields only, with the schema key names. The audit
+// canonical encodes the checked fields only (call it after check), with the schema key names. The audit
 // row stores this copy, never the received bytes: Go's decoder matches keys without
 // case and keeps the last of two equal keys, so the raw data could hold a value
 // the checks never saw (security review, synthwerk#106).

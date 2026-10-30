@@ -132,7 +132,7 @@ func (d studioPageData) check(created bool) error {
 	return nil
 }
 
-// canonical encodes the checked fields only, with the schema key names. The audit
+// canonical encodes the checked fields only (call it after check), with the schema key names. The audit
 // row stores this copy, never the received bytes: Go's decoder matches keys without
 // case and keeps the last of two equal keys (security review, synthwerk#106).
 func (d studioPageData) canonical(created bool) (json.RawMessage, error) {
