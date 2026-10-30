@@ -251,10 +251,10 @@ func checkLimit(ctx context.Context, tx pgx.Tx, orgID string) error {
 
 // requireAdmin checks the stored role of sub in org and holds a share lock on the
 // row until the end of tx, so a parallel demotion waits for this write. The stored
-// role wins over the token (spec #29).
+// role wins over the token (spec #29). A deactivated member has no role (#37).
 func requireAdmin(ctx context.Context, tx pgx.Tx, orgID, sub string) error {
 	var r string
-	err := tx.QueryRow(ctx, `SELECT role FROM memberships WHERE org_id = $1 AND user_sub = $2 FOR SHARE`, orgID, sub).Scan(&r)
+	err := tx.QueryRow(ctx, `SELECT role FROM memberships WHERE org_id = $1 AND user_sub = $2 AND status = 'active' FOR SHARE`, orgID, sub).Scan(&r)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrForbidden
 	}

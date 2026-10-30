@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
 	"time"
@@ -28,12 +29,23 @@ type Org struct {
 
 // Membership is a row of identity.memberships.
 type Membership struct {
-	OrgID     string
-	UserSub   string
-	Role      Role
+	OrgID   string
+	UserSub string
+	Role    Role
+	// Status is StatusActive or StatusDeactivated (synthwerk#37).
+	Status    string
 	GrantID   string
 	UpdatedAt time.Time
 }
+
+// Member statuses (synthwerk#37).
+const (
+	StatusActive      = "active"
+	StatusDeactivated = "deactivated"
+)
+
+// Active reports whether the membership counts for access and the owner rule.
+func (m Membership) Active() bool { return m.Status == StatusActive }
 
 // DB is the part of *pgxpool.Pool the store needs.
 type DB interface {
@@ -61,6 +73,11 @@ type Store struct {
 	Grants Grants
 	// Plans is nil in tests that do not need entitlements.
 	Plans Plans
+	// Users invites users and switches user grants on and off (synthwerk#37). Nil:
+	// invite answers ErrUpstream, a status change stays in identity.
+	Users Users
+	// Log gets drift warnings after a failed commit. Nil: slog.Default.
+	Log *slog.Logger
 	// Source is the CloudEvents source, /synthwerk/identity/<env>.
 	Source string
 }
@@ -89,10 +106,11 @@ func (s *Store) OrgByZitadelID(ctx context.Context, zitadelOrgID string) (Org, e
 	return scanOrg(s.DB.QueryRow(ctx, `SELECT `+orgCols+` FROM orgs WHERE zitadel_org_id = $1`, zitadelOrgID))
 }
 
-// MemberRole returns the stored role of sub in org, or ErrNotFound.
+// MemberRole returns the stored role of sub in org, or ErrNotFound. A deactivated
+// member has no role (synthwerk#37).
 func (s *Store) MemberRole(ctx context.Context, orgID, sub string) (Role, error) {
 	var r string
-	err := s.DB.QueryRow(ctx, `SELECT role FROM memberships WHERE org_id = $1 AND user_sub = $2`, orgID, sub).Scan(&r)
+	err := s.DB.QueryRow(ctx, `SELECT role FROM memberships WHERE org_id = $1 AND user_sub = $2 AND status = 'active'`, orgID, sub).Scan(&r)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", ErrNotFound
 	}
@@ -101,26 +119,29 @@ func (s *Store) MemberRole(ctx context.Context, orgID, sub string) (Role, error)
 
 // ListMembers returns up to limit members of org with user_sub > after, by user_sub.
 func (s *Store) ListMembers(ctx context.Context, orgID, after string, limit int) ([]Membership, error) {
-	rows, err := s.DB.Query(ctx, `SELECT org_id::text, user_sub, role, coalesce(zitadel_grant_id, ''), updated_at
-		FROM memberships WHERE org_id = $1 AND user_sub > $2 ORDER BY user_sub LIMIT $3`, orgID, after, limit)
+	rows, err := s.DB.Query(ctx, `SELECT `+memberCols+`
+		FROM memberships WHERE org_id = $1 AND user_sub > $2 AND status <> 'invited' ORDER BY user_sub LIMIT $3`, orgID, after, limit)
 	if err != nil {
 		return nil, err
 	}
 	return pgx.CollectRows(rows, scanMember)
 }
 
+const memberCols = `org_id::text, user_sub, role, status, coalesce(zitadel_grant_id, ''), updated_at`
+
 func scanMember(row pgx.CollectableRow) (Membership, error) {
 	var m Membership
 	var role string
-	err := row.Scan(&m.OrgID, &m.UserSub, &role, &m.GrantID, &m.UpdatedAt)
+	err := row.Scan(&m.OrgID, &m.UserSub, &role, &m.Status, &m.GrantID, &m.UpdatedAt)
 	m.Role = Role(role)
 	return m, err
 }
 
 // lockMembers locks the owner rows of org plus the rows of subs, in one order, and
-// returns them by user_sub. Two role changes in one org run one after the other.
+// returns them by user_sub and the number of active owners. Two member changes in
+// one org run one after the other.
 func lockMembers(ctx context.Context, tx pgx.Tx, orgID string, subs ...string) (map[string]Membership, int, error) {
-	rows, err := tx.Query(ctx, `SELECT org_id::text, user_sub, role, coalesce(zitadel_grant_id, ''), updated_at
+	rows, err := tx.Query(ctx, `SELECT `+memberCols+`
 		FROM memberships WHERE org_id = $1 AND (role = 'owner' OR user_sub = ANY($2))
 		ORDER BY user_sub FOR UPDATE`, orgID, subs)
 	if err != nil {
@@ -134,7 +155,7 @@ func lockMembers(ctx context.Context, tx pgx.Tx, orgID string, subs ...string) (
 	owners := 0
 	for _, m := range ms {
 		out[m.UserSub] = m
-		if m.Role == Owner {
+		if m.Role == Owner && m.Active() {
 			owners++
 		}
 	}
@@ -155,8 +176,8 @@ func (s *Store) ChangeRole(ctx context.Context, org Org, actorSub, targetSub str
 		return Membership{}, false, fmt.Errorf("orgs: lock: %w", err)
 	}
 	actor, ok := locked[actorSub]
-	if !ok {
-		return Membership{}, false, ErrForbidden // token says a role, the mirror says no member
+	if !ok || !actor.Active() {
+		return Membership{}, false, ErrForbidden // token says a role, the mirror says no (active) member
 	}
 	target, ok := locked[targetSub]
 	if !ok {
@@ -171,7 +192,7 @@ func (s *Store) ChangeRole(ctx context.Context, org Org, actorSub, targetSub str
 	if target.Role == to {
 		return target, false, nil
 	}
-	if target.Role == Owner && owners <= 1 {
+	if target.Role == Owner && target.Active() && owners <= 1 {
 		return Membership{}, false, ErrLastOwner
 	}
 	if err := tx.QueryRow(ctx, `UPDATE memberships SET role = $3, updated_at = now()
@@ -191,10 +212,38 @@ func (s *Store) ChangeRole(ctx context.Context, org Org, actorSub, targetSub str
 		}
 	}
 	if err := commit(ctx, tx); err != nil {
+		if s.Grants != nil {
+			s.repairRole(context.WithoutCancel(ctx), org, target, to)
+		}
 		return Membership{}, false, err
 	}
 	target.Role = to
 	return target, true, nil
+}
+
+// repairRole runs after a failed commit whose Zitadel write went through. It
+// fails closed: a downgrade stays in Zitadel (a retry repairs the row); an
+// upgrade is undone only when a re-read shows the row still holds the old role.
+func (s *Store) repairRole(ctx context.Context, org Org, target Membership, to Role) {
+	log := s.Log
+	if log == nil {
+		log = slog.Default()
+	}
+	attrs := []any{slog.String("event.name", "orgs.role_drift"), slog.String("org.id", org.ID), slog.String("enduser.id", target.UserSub)}
+	if !to.AtLeast(target.Role) {
+		log.WarnContext(ctx, "role change: commit failed, Zitadel keeps the lower role", attrs...)
+		return
+	}
+	var cur string
+	err := s.DB.QueryRow(ctx, `SELECT role FROM memberships WHERE org_id = $1 AND user_sub = $2`, org.ID, target.UserSub).Scan(&cur)
+	if err == nil && Role(cur) == to {
+		log.WarnContext(ctx, "role change: commit error, but the row has the new role: Zitadel kept", attrs...)
+		return
+	}
+	log.WarnContext(ctx, "role change: commit failed, Zitadel set back to the old role", attrs...)
+	if err := s.Grants.SetRole(ctx, org.ZitadelOrgID, target.UserSub, target.GrantID, target.Role); err != nil {
+		log.WarnContext(ctx, "Zitadel role not set back: drift", append(attrs, slog.String("exception.message", err.Error()))...)
+	}
 }
 
 // commit maps the deferred owner trigger to ErrLastOwner.
@@ -306,7 +355,7 @@ func (s *Store) applyGrant(ctx context.Context, tx pgx.Tx, c GrantChange, orgNam
 		return "", err
 	}
 	cur, isMember := locked[sub]
-	lastOwner := org.Status == "active" && cur.Role == Owner && owners <= 1
+	lastOwner := org.Status == "active" && cur.Role == Owner && cur.Active() && owners <= 1
 	switch {
 	case leave && !isMember:
 		return OutcomeIgnored, nil

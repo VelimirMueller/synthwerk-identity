@@ -1,7 +1,8 @@
 // Command identity serves synthwerk-identity: health probes, migrations, the org
-// routes (orgs, members, roles; synthwerk#29), apps and widget tokens (synthwerk#30),
-// the export and delete of the own account (synthwerk#41), the Zitadel Action hook,
-// the outbox relay and the Zitadel user remover.
+// routes (orgs, members, roles; synthwerk#29; invite, deactivate and the audit list;
+// synthwerk#37), apps and widget tokens (synthwerk#30), the export and delete of the
+// own account (synthwerk#41), the Zitadel Action hook, the outbox relay and the
+// Zitadel user remover.
 //
 //	identity              run the service
 //	identity healthcheck  exit 0 when /readyz answers 200 (container health check)
@@ -27,7 +28,8 @@
 //	SYNTHWERK_IDENTITY_ZITADEL_API_URL   Zitadel API inside the stack, for example http://zitadel:8080.
 //	SYNTHWERK_IDENTITY_ZITADEL_HOST      instance host Zitadel expects, for example auth.localhost:8080.
 //	SYNTHWERK_IDENTITY_ZITADEL_PAT_FILE  file with the PAT of the machine user that manages user grants (secret).
-//	                                     Unset (or no API URL) = role changes stay in identity, Zitadel is not written.
+//	                                     Unset (or no API URL) = role and status changes stay in identity, Zitadel is
+//	                                     not written, an invite answers 502. Invites also need ORG_USER_MANAGER (#37).
 //	SYNTHWERK_IDENTITY_ZITADEL_PROJECT_ID  project synthwerk-api; grants of other projects are dropped.
 //	SYNTHWERK_IDENTITY_MFA_GATE_KEY_FILE      file with the signing key of the MFA gate target (secret).
 //	                                     Set = the gate listens on the hook address; it needs the Zitadel client.
@@ -78,6 +80,7 @@ import (
 	"github.com/VelimirMueller/synthwerk-identity/internal/account"
 	"github.com/VelimirMueller/synthwerk-identity/internal/app"
 	"github.com/VelimirMueller/synthwerk-identity/internal/apps"
+	"github.com/VelimirMueller/synthwerk-identity/internal/audit"
 	"github.com/VelimirMueller/synthwerk-identity/internal/entitlements"
 	"github.com/VelimirMueller/synthwerk-identity/internal/mfagate"
 	"github.com/VelimirMueller/synthwerk-identity/internal/orgs"
@@ -170,8 +173,9 @@ func run(ctx context.Context) error {
 	store := &orgs.Store{DB: db, Source: source, Plans: plans}
 	if zc != nil {
 		store.Grants = zc
+		store.Users = zc
 	} else {
-		logger.WarnContext(ctx, "zitadel client off: role changes stay in identity", slog.String("event.name", "zitadel.client_off"))
+		logger.WarnContext(ctx, "zitadel client off: role and status changes stay in identity, invites answer 502", slog.String("event.name", "zitadel.client_off"))
 	}
 	appCfg := app.Config{Version: version, Commit: commit, Env: logOpts.Env}
 	if issuer := env.Get(app.Service, "OIDC_ISSUER", ""); issuer != "" {
@@ -185,7 +189,8 @@ func run(ctx context.Context) error {
 			return err
 		}
 		appCfg.Verifier = v
-		appCfg.Orgs = &orgs.Handler{Repo: store, Log: logger}
+		appCfg.Orgs = &orgs.Handler{Repo: store, Members: store, Log: logger}
+		appCfg.Audit = &audit.Handler{Repo: &audit.Store{DB: db}, Orgs: appCfg.Orgs}
 		wi, err := widgetIssuer()
 		if err != nil {
 			return err

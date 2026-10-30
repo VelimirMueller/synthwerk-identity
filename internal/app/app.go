@@ -20,6 +20,7 @@ import (
 
 	"github.com/VelimirMueller/synthwerk-identity/internal/account"
 	"github.com/VelimirMueller/synthwerk-identity/internal/apps"
+	"github.com/VelimirMueller/synthwerk-identity/internal/audit"
 	"github.com/VelimirMueller/synthwerk-identity/internal/entitlements"
 	"github.com/VelimirMueller/synthwerk-identity/internal/orgs"
 	"github.com/VelimirMueller/synthwerk-identity/migrations"
@@ -46,6 +47,8 @@ type Config struct {
 	Entitlements *entitlements.Handler
 	// Account serves the export and the delete of the own account (synthwerk#41). Needs Verifier.
 	Account *account.Handler
+	// Audit serves the audit list of an org (synthwerk#37). Needs Orgs.
+	Audit *audit.Handler
 }
 
 // Pinger checks the database connection. *pgxpool.Pool satisfies it.
@@ -101,6 +104,12 @@ func New(pinger Pinger, logger *slog.Logger, cfg Config) (*App, error) {
 			return nil, errors.New("app: the app routes need the org routes")
 		}
 		cfg.Apps.Register(mux, func(next http.Handler) http.Handler { return auth.Middleware(cfg.Verifier, next) })
+	}
+	if cfg.Audit != nil {
+		if cfg.Orgs == nil {
+			return nil, errors.New("app: the audit route needs the org routes")
+		}
+		cfg.Audit.Register(mux, func(next http.Handler) http.Handler { return auth.Middleware(cfg.Verifier, next) })
 	}
 	// The log line sits inside the span. The probes create no span.
 	a.handler = otelhttp.NewHandler(kitlog.HTTP(logger, mux), Service,
