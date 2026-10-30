@@ -75,3 +75,4 @@ updated: 2026-10-30
 | 2026-10-29 | First version: free plan per org, two read routes, `org.entitlements_changed.v1` (synthwerk#31). |
 | 2026-10-30 | `apps_per_org` is enforced on app create (synthwerk#38). |
 | 2026-10-30 | `cmd/identity/main.go` also starts the `EVT_LLM` consumer of the audit list (synthwerk#39). No change to this feature. |
+| 2026-10-30 | `cmd/identity/main.go` also starts the `EVT_STUDIO` consumer of the audit list (synthwerk#106). No change to this feature. |

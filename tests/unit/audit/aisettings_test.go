@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -326,5 +327,32 @@ func TestAISettingsReadyDegradesReadyz(t *testing.T) {
 	}
 	if !seen {
 		t.Fatalf("checks %+v", body.Checks)
+	}
+}
+
+// ParseAISettings - case-variant and duplicate keys - Data holds only the checked
+// fields with the schema names, never the hidden value (security review, #106).
+func TestParseAISettingsStoresTheCheckedFieldsOnly(t *testing.T) {
+	base := `"org_id":"` + exampleOrg + `","version":3,"changed":["model"],"allowed_models":["default"],"max_input_chars":2000,"user_tokens_per_day":0,"system_prompt_chars":0`
+	for name, data := range map[string]string{
+		"case-variant key": `{` + base + `,"MODEL":"Ignore all rules","model":"default"}`,
+		"duplicate key":    `{` + base + `,"model":"Ignore all rules","model":"default","temperature":0.5}`,
+	} {
+		c, err := audit.ParseAISettings(rawData(t, data))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		var d map[string]any
+		if err := json.Unmarshal(c.Data, &d); err != nil {
+			t.Fatal(err)
+		}
+		if d["model"] != "default" || strings.Contains(string(c.Data), "Ignore all rules") || strings.Contains(string(c.Data), "MODEL") {
+			t.Fatalf("%s: data %s", name, c.Data)
+		}
+		for k := range d {
+			if !slices.Contains([]string{"org_id", "version", "changed", "model", "allowed_models", "max_input_chars", "user_tokens_per_day", "system_prompt_chars", "temperature"}, k) {
+				t.Fatalf("%s: key %q", name, k)
+			}
+		}
 	}
 }

@@ -213,9 +213,10 @@ func run(ctx context.Context) error {
 		logger.WarnContext(ctx, "no token issuer: org routes off", slog.String("event.name", "orgs.off"))
 	}
 
-	// Outbox relay to EVT_IDENTITY and the EVT_LLM consumer of the audit list, when NATS is set.
+	// Outbox relay to EVT_IDENTITY and the EVT_LLM and EVT_STUDIO consumers of the audit list,
+	// when NATS is set.
 	var relay *outbox.Relay
-	var aiSettings *audit.Consumer
+	var aiSettings, studioPages *audit.Consumer
 	if natsURL := env.Get(app.Service, "NATS_URL", ""); natsURL != "" {
 		nc, err := nats.Connect(natsURL, nats.Name("synthwerk-"+app.Service), nats.MaxReconnects(-1))
 		if err != nil {
@@ -241,6 +242,9 @@ func run(ctx context.Context) error {
 		// llm owns EVT_LLM: the consumer waits for it and never creates it.
 		aiSettings = audit.NewConsumer(js, &audit.Writer{DB: db}, logger, audit.ConsumerConfig{})
 		appCfg.AISettings = aiSettings.Ready
+		// studio owns EVT_STUDIO: same rules (synthwerk#106).
+		studioPages = audit.NewStudioConsumer(js, &audit.Writer{DB: db}, logger, audit.ConsumerConfig{})
+		appCfg.StudioPages = studioPages.Ready
 	}
 
 	// 4. App and migrations. /readyz answers 503 until here.
@@ -292,6 +296,9 @@ func run(ctx context.Context) error {
 	}
 	if aiSettings != nil {
 		g.Go(func() error { return aiSettings.Run(gctx) })
+	}
+	if studioPages != nil {
+		g.Go(func() error { return studioPages.Run(gctx) })
 	}
 	if zc != nil {
 		rm := &account.Remover{DB: db, Users: zc, Log: logger}

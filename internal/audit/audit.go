@@ -5,8 +5,9 @@
 // of the change. The outbox deletes published rows after 7 days; this table keeps
 // them. The list shows them newest first to owners and admins of the org.
 //
-// The list also holds the AI settings changes of llm (synthwerk#39): a JetStream
-// consumer copies them from EVT_LLM (aisettings.go).
+// The list also holds the AI settings changes of llm (synthwerk#39) and the page
+// builder changes of studio (synthwerk#106): JetStream consumers copy them from
+// EVT_LLM (aisettings.go) and EVT_STUDIO (studio.go), with the rules of consumer.go.
 package audit
 
 import (
