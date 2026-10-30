@@ -181,11 +181,12 @@ func (d aiSettingsData) canonical() (json.RawMessage, error) {
 		"system_prompt_chars": *d.SystemPromptChars,
 	}
 	if d.Temperature != nil {
-		var t float64
-		if err := json.Unmarshal(d.Temperature, &t); err != nil {
-			return nil, err
+		// check refuses an explicit null; refuse it here too, so it never turns into 0.
+		var t *float64
+		if err := json.Unmarshal(d.Temperature, &t); err != nil || t == nil {
+			return nil, malformed("temperature is not a number")
 		}
-		out["temperature"] = t
+		out["temperature"] = *t
 	}
 	return json.Marshal(out)
 }
