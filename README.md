@@ -92,6 +92,10 @@ go run ./cmd/identity  # serves :8080
 | `SYNTHWERK_IDENTITY_LOG_FORMAT` | `json` | `console` only in env `local` |
 
 Probes: `GET /healthz` (liveness) and `GET /readyz` (readiness, pings Postgres).
+
+| Internal route | Answer | Caller |
+| --- | --- | --- |
+| `GET /internal/v1/widget-origins?origin=<origin>` | `204` when an app of an active org lists the origin, `404` when none does, `400` for an invalid origin. No token, `Cache-Control: no-store` | llm, for the CORS answer of the widget chat routes. The edge refuses `/identity/internal/*` |
 <p>
 <picture>
   <source media="(prefers-color-scheme: light)" srcset="assets/readme/startnotes-v2-light.svg">

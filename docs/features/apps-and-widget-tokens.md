@@ -4,8 +4,8 @@ slug: apps-and-widget-tokens
 status: beta
 epic: E2
 owner: identity
-paths: ["internal/apps/**", "internal/widget/**", "migrations/0004_apps.sql", "migrations/0007_app_widget_settings.sql", "cmd/identity/main.go"]
-api: ["GET /v1/orgs/{orgId}/apps", "POST /v1/orgs/{orgId}/apps", "GET /v1/orgs/{orgId}/apps/{appId}", "PATCH /v1/orgs/{orgId}/apps/{appId}", "DELETE /v1/orgs/{orgId}/apps/{appId}", "POST /v1/apps/{appId}/widget-tokens", "GET /v1/apps/{appId}/widget-settings"]
+paths: ["internal/apps/**", "internal/widget/**", "migrations/0004_apps.sql", "migrations/0007_app_widget_settings.sql", "migrations/0010_apps_origin_index.sql", "cmd/identity/main.go"]
+api: ["GET /v1/orgs/{orgId}/apps", "POST /v1/orgs/{orgId}/apps", "GET /v1/orgs/{orgId}/apps/{appId}", "PATCH /v1/orgs/{orgId}/apps/{appId}", "DELETE /v1/orgs/{orgId}/apps/{appId}", "POST /v1/apps/{appId}/widget-tokens", "GET /v1/apps/{appId}/widget-settings", "GET /internal/v1/widget-origins"]
 events: ["dev.synthwerk.identity.app.created.v1"]
 mcp: []
 updated: 2026-10-30
@@ -19,6 +19,7 @@ updated: 2026-10-30
 > - The token is a JWT signed by identity. It lives 10 minutes by default, 15 minutes at most.
 > - Each app has widget settings. The widget reads them without a token, only from a listed origin (synthwerk#38).
 > - An org gets at most `apps_per_org` apps from its plan (synthwerk#38).
+> - An internal route tells llm if any app lists an origin. llm then answers CORS for the widget chat (infra#21).
 
 ## What it does
 
@@ -29,6 +30,9 @@ updated: 2026-10-30
 - The widget token route answers the CORS preflight (`OPTIONS`). Only a listed origin gets `Access-Control-Allow-Origin`.
 - `PATCH /v1/orgs/{orgId}/apps/{appId}` also sets `widget_settings`: position, theme, mode, language, accent group, greeting. New settings replace the old ones (column `apps.widget_settings`, migration 0007).
 - `GET /v1/apps/{appId}/widget-settings` returns the settings without a token, only to a listed `Origin`. The answer holds the settings only. It has a CORS preflight too (GET, no extra headers).
+- `GET /internal/v1/widget-origins?origin=<origin>` answers 204 when an app of an active org lists the origin. Else 404.
+- The internal route needs no token. It tells only yes or no: no app id, no org. The edge refuses `/identity/internal/*`.
+- llm asks the internal route before it answers CORS for the widget chat routes (infra#21).
 - `POST /v1/orgs/{orgId}/apps` counts the apps of the org under a row lock on its entitlements. At `apps_per_org` it answers 403 `app_limit_reached`.
 
 ## How to use
@@ -61,6 +65,10 @@ updated: 2026-10-30
 | Stored settings | jsonb, object, 4 KiB at most. A missing or unknown stored value reads as its default |
 | Widget settings read | No token. App → org active → `Origin` in the list. Unknown app or inactive org: 404 |
 | CORS caching | Both widget routes send `Vary: Origin` on every answer, preflight and refusals included. Refusals and tokens: `Cache-Control: no-store`. Settings: `no-cache` |
+| Internal origin lookup | `GET /internal/v1/widget-origins`, port 8080, no token. Exactly one `origin` query parameter |
+| Lookup compare | Canonical form, exact match. Only apps of an org with status `active` count |
+| Lookup answers | 204 listed, 404 not listed, 400 invalid origin, 500 database error. Always `Cache-Control: no-store` |
+| Lookup index | GIN index `apps_allowed_origins` on `apps.allowed_origins` (migration 0010) |
 | Signing key | Read once at start; a new key needs a restart. One key in the key set |
 
 ## Events
@@ -73,12 +81,12 @@ updated: 2026-10-30
 
 | Status | Problem type | Cause |
 |---|---|---|
-| 400 | `invalid_request` | Bad JSON, name, origin (detail names the index, never the value) or paging. |
+| 400 | `invalid_request` | Bad JSON, name, origin (detail names the index, never the value) or paging. Internal lookup: missing, repeated or invalid `origin`. |
 | 401 | `unauthenticated` | User token missing or not valid. A widget token is not a user token. |
 | 403 | `forbidden` | Role does not allow the write. Generic body. |
 | 403 | `origin_not_allowed` | `Origin` is missing or not in the allow-list. |
 | 403 | `app_limit_reached` | The org has `apps_per_org` apps already. The detail names the limit. |
-| 404 | `not_found` | Unknown app or org, or the caller is not a member. |
+| 404 | `not_found` | Unknown app or org, or the caller is not a member. Internal lookup: no app of an active org lists the origin. |
 
 ## Tests
 
@@ -88,6 +96,8 @@ updated: 2026-10-30
 - `tests/unit/apps/http_test.go` — `GetWidgetSettings - new app, listed origin, no token - 200 defaults, CORS, Vary, no-cache, settings only`, `GetWidgetSettings - origin not listed - 403 origin_not_allowed, no CORS header, Vary, no-store`, `UpdateApp - free colour as accent - 400 invalid_request, nothing stored`, `CreateApp - org at its app limit - 403 app_limit_reached with the limit`
 - `tests/unit/apps/settings_test.go` — `Refused - free colour - ErrSettings`, `Greeting - 280 characters with a line break - accepted, trimmed`
 - `tests/integration/apps/apps_test.go` — `Create - org at apps_per_org - LimitError, no row, no event`, `Create - eight parallel creates, one slot left - exactly one app made`, `Create - org without an entitlements row - error, never no limit`, `Settings - new app defaults, update replaces them, row from before 0007 reads as defaults`, `GetWidgetSettings - listed origin, no token - 200 stored settings, CORS, Vary, no-cache`
+- `tests/unit/apps/widgetorigins_test.go` — `WidgetOrigin - listed origin in upper case with the default port - 204, store gets the canonical form`, `WidgetOrigin - null origin - 400 invalid_request, no lookup`, `WidgetOrigin - store fails - 500, never 204`
+- `tests/integration/apps/widgetorigins_test.go` — `WidgetOrigin - origin of no app, subdomain and other port - 404`, `WidgetOrigin - org of the only app not active - 404`, `Migration - GIN index on allowed_origins - present`
 - `tests/integration/apps/apps_test.go` — `Create - owner - app row and app.created in one commit, no origins in the event`, `CreateWidgetToken - member on a listed origin - 201, verified with the key set, bound to user, org, app and origin`, `UpdateApp - origin removed - widget token on that origin 403`, `CreateWidgetToken - member left the org, old token - 404`
 
 ## Changes
@@ -97,3 +107,4 @@ updated: 2026-10-30
 | 2026-10-29 | First version (synthwerk#30). |
 | 2026-10-30 | Widget settings, the public settings route, `apps_per_org` enforced, `Vary: Origin` on every widget route answer (synthwerk#38). |
 | 2026-10-30 | `cmd/identity/main.go` also starts the `EVT_LLM` consumer of the audit list (synthwerk#39). No change to this feature. |
+| 2026-10-30 | Internal route `GET /internal/v1/widget-origins` and GIN index 0010: llm answers CORS for the widget chat (infra#21). |
