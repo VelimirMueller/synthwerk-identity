@@ -53,7 +53,8 @@ const (
 )
 
 // Register adds the routes to mux. authn must be auth.Middleware: every route but
-// the CORS preflight and the key set needs a verified user token.
+// the CORS preflights, the public settings, the internal lookup and the key set
+// needs a verified user token.
 func (h *Handler) Register(mux *http.ServeMux, authn func(http.Handler) http.Handler) {
 	mux.Handle("GET /v1/orgs/{orgId}/apps", authn(http.HandlerFunc(h.listApps)))
 	mux.Handle("POST /v1/orgs/{orgId}/apps", authn(http.HandlerFunc(h.createApp)))
@@ -68,7 +69,9 @@ func (h *Handler) Register(mux *http.ServeMux, authn func(http.Handler) http.Han
 	mux.HandleFunc("GET "+WidgetOriginsPath, h.widgetOrigin)
 	if h.Widget != nil {
 		mux.Handle("POST /v1/apps/{appId}/widget-tokens", h.cors(authn(http.HandlerFunc(h.createWidgetToken))))
-		mux.Handle("OPTIONS /v1/apps/{appId}/widget-tokens", h.cors(preflight(http.MethodPost, "Authorization, Content-Type")))
+		// The preflight passes every valid origin (widgets#41): the trade then answers
+		// 403 origin_not_allowed readable to the widget. See tokenPreflight.
+		mux.Handle("OPTIONS /v1/apps/{appId}/widget-tokens", tokenPreflight())
 		mux.Handle("GET "+widget.JWKSPath, h.Widget.JWKSHandler())
 	}
 }
@@ -164,7 +167,7 @@ func (h *Handler) updateApp(w http.ResponseWriter, r *http.Request) {
 		ws, err := WidgetSettingsFrom(*body.WidgetSettings)
 		if err != nil {
 			orgs.WriteProblem(w, r, http.StatusBadRequest, orgs.CodeInvalidRequest,
-				fmt.Sprintf("widget_settings: every field needs an allowed value; greeting is plain text, %d characters or less.", MaxGreetingLen))
+				fmt.Sprintf("widget_settings: every field needs an allowed value; greeting is plain text without control or bidi characters, %d characters or less.", MaxGreetingLen))
 			return
 		}
 		change.Settings = &ws
@@ -300,6 +303,11 @@ func (h *Handler) createWidgetToken(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		h.Log.InfoContext(r.Context(), "widget token refused", slog.String("event.name", "apps.widget_token_refused"),
 			slog.String("org.id", org.ID), slog.String("app.id", app.ID), slog.String("reason", orgs.CodeOriginNotAllowed))
+		// The widget on that page must read this refusal to show "This site cannot use
+		// the chat" (widgets#41). The answer holds no token and no app data.
+		if o := singleOrigin(r); readableOrigin(o) {
+			w.Header().Set("Access-Control-Allow-Origin", o)
+		}
 		orgs.WriteProblem(w, r, http.StatusForbidden, orgs.CodeOriginNotAllowed, "")
 		return
 	}
@@ -358,9 +366,10 @@ func singleOrigin(r *http.Request) string {
 	return ""
 }
 
-// cors sets the CORS headers of the widget token route. Only an origin in the
+// cors sets the CORS headers of the widget routes. Only an origin in the
 // allow-list of the app gets Access-Control-Allow-Origin; every other origin gets
-// none, so the browser hides the answer. The handler checks the origin again.
+// none, so the browser hides the answer. The handler checks the origin again. One
+// exception: createWidgetToken makes its 403 origin_not_allowed readable.
 func (h *Handler) cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add("Vary", "Origin")
@@ -393,6 +402,46 @@ func preflight(method, headers string) http.Handler {
 		w.Header().Set("Access-Control-Max-Age", preflightMaxAge)
 		w.WriteHeader(http.StatusNoContent)
 	})
+}
+
+// tokenPreflight answers the CORS preflight of the widget token trade. Every
+// origin in canonical form passes; a missing, repeated or malformed origin gets 403
+// without CORS headers. The answer never depends on the app, so it tells nothing
+// about apps or allow-lists.
+//
+// Why every origin (widgets#41): with a refused preflight the browser hides the
+// 403 origin_not_allowed of the trade, and the widget cannot tell "this site is not
+// allowed" from a network error. Opening the preflight is safe:
+//   - The trade takes a bearer user token, never cookies (no
+//     Access-Control-Allow-Credentials). A page that sends it already holds it and
+//     could send the same request from any non-browser client.
+//   - Only two answers carry Access-Control-Allow-Origin: 201 for a listed origin
+//     (cors) and 403 origin_not_allowed (createWidgetToken). A non-listed origin never
+//     gets a token. 401, 404 and 5xx stay unreadable to it.
+//   - The trade changes no state: a refusal writes one log line.
+func tokenPreflight() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Add("Vary", "Origin")
+		w.Header().Set("Cache-Control", "no-store")
+		origin := singleOrigin(r)
+		if !readableOrigin(origin) {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		w.Header().Set("Access-Control-Allow-Methods", http.MethodPost)
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+		w.Header().Set("Access-Control-Max-Age", preflightMaxAge)
+		w.WriteHeader(http.StatusNoContent)
+	})
+}
+
+// readableOrigin reports whether origin may be echoed in
+// Access-Control-Allow-Origin: it passes the strict parser (no CR, LF or space) and
+// is already in canonical form, the form a browser sends and compares.
+func readableOrigin(origin string) bool {
+	c, err := CanonicalOrigin(origin)
+	return err == nil && c == origin
 }
 
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {

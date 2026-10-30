@@ -230,20 +230,41 @@ func TestWidgetToken(t *testing.T) {
 		}
 	})
 
-	refused := []struct {
+	// A refusal on a valid origin is readable to that origin (widgets#41): the widget must
+	// tell "not allowed" from a network error. It holds no token. Malformed, missing or
+	// repeated origins get no CORS header at all.
+	readable := []struct{ name, origin string }{
+		{"origin not listed", "https://evil.test"},
+		{"suffix of a listed origin", "https://shop.example.evil.test"},
+		{"subdomain of a listed origin", "https://a.shop.example"},
+		{"listed host, other port", "https://shop.example:8443"},
+	}
+	for _, c := range readable {
+		t.Run("CreateWidgetToken - "+c.name+" - 403 origin_not_allowed readable to that origin, no token", func(t *testing.T) {
+			rec := f.do(t, http.MethodPost, tokens, memberTok, "", c.origin)
+			if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"code":"origin_not_allowed"`) {
+				t.Fatalf("%d %s", rec.Code, rec.Body)
+			}
+			h := rec.Header()
+			if h.Get("Access-Control-Allow-Origin") != c.origin || h.Get("Access-Control-Allow-Credentials") != "" || strings.Contains(rec.Body.String(), "access_token") {
+				t.Fatalf("leak: %v %s", h, rec.Body)
+			}
+			if h.Get("Vary") != "Origin" || h.Get("Cache-Control") != "no-store" {
+				t.Fatalf("cache headers %v", h)
+			}
+		})
+	}
+	opaque := []struct {
 		name    string
 		origins []string
 	}{
-		{"origin not listed", []string{"https://evil.test"}},
-		{"suffix of a listed origin", []string{"https://shop.example.evil.test"}},
-		{"subdomain of a listed origin", []string{"https://a.shop.example"}},
-		{"listed host, other scheme", []string{"http://shop.example"}},
-		{"listed host, other port", []string{"https://shop.example:8443"}},
 		{"null origin", []string{"null"}},
+		{"listed host, http (only loopback may use it)", []string{"http://shop.example"}},
+		{"origin not in canonical form", []string{"https://EVIL.test:443"}},
 		{"no Origin header", nil},
 		{"two Origin headers", []string{shop, shop}},
 	}
-	for _, c := range refused {
+	for _, c := range opaque {
 		t.Run("CreateWidgetToken - "+c.name+" - 403 origin_not_allowed, no CORS header", func(t *testing.T) {
 			rec := f.do(t, http.MethodPost, tokens, memberTok, "", c.origins...)
 			if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"code":"origin_not_allowed"`) {
@@ -274,7 +295,19 @@ func TestWidgetToken(t *testing.T) {
 				t.Fatalf("%d %s", rec.Code, rec.Body)
 			}
 		})
+		t.Run("CreateWidgetToken - "+c.name+", origin not listed - 404 unreadable, no CORS header", func(t *testing.T) {
+			rec := f.do(t, http.MethodPost, c.path, c.tok, "", "https://evil.test")
+			if rec.Code != http.StatusNotFound || rec.Header().Get("Access-Control-Allow-Origin") != "" {
+				t.Fatalf("%d %v", rec.Code, rec.Header())
+			}
+		})
 	}
+	t.Run("CreateWidgetToken - no user token, origin not listed - 401 unreadable, no CORS header", func(t *testing.T) {
+		rec := f.do(t, http.MethodPost, tokens, "", "", "https://evil.test")
+		if rec.Code != http.StatusUnauthorized || rec.Header().Get("Access-Control-Allow-Origin") != "" {
+			t.Fatalf("%d %v", rec.Code, rec.Header())
+		}
+	})
 
 	t.Run("CreateWidgetToken - no user token - 401", func(t *testing.T) {
 		if rec := f.do(t, http.MethodPost, tokens, "", "", shop); rec.Code != http.StatusUnauthorized {
@@ -298,21 +331,42 @@ func TestWidgetToken(t *testing.T) {
 		}
 	})
 
-	t.Run("Preflight - listed origin - 204 with CORS headers", func(t *testing.T) {
-		rec := f.do(t, http.MethodOptions, tokens, "", "", shop)
-		h := rec.Header()
-		if rec.Code != http.StatusNoContent || h.Get("Access-Control-Allow-Origin") != shop || h.Get("Access-Control-Allow-Methods") != http.MethodPost ||
-			!strings.Contains(h.Get("Access-Control-Allow-Headers"), "Authorization") || h.Get("Vary") != "Origin" {
-			t.Fatalf("%d %v", rec.Code, h)
-		}
-	})
-	t.Run("Preflight - origin not listed - 403 without CORS headers", func(t *testing.T) {
-		rec := f.do(t, http.MethodOptions, tokens, "", "", "https://shop.example.evil.test")
-		if rec.Code != http.StatusForbidden || rec.Header().Get("Access-Control-Allow-Origin") != "" ||
-			rec.Header().Get("Vary") != "Origin" || rec.Header().Get("Cache-Control") != "no-store" {
-			t.Fatalf("%d %v", rec.Code, rec.Header())
-		}
-	})
+	// The token preflight passes every canonical origin and never looks at the app
+	// (widgets#41): the trade itself decides, and only 201 and 403 origin_not_allowed are
+	// readable to the page.
+	for _, c := range []struct{ name, path, origin string }{
+		{"listed origin", tokens, shop},
+		{"origin not listed", tokens, "https://shop.example.evil.test"},
+		{"unknown app", "/v1/apps/019a3b10-0000-7000-8000-000000000000/widget-tokens", "https://evil.test"},
+	} {
+		t.Run("Preflight - "+c.name+" - 204 with CORS headers, no credentials, no-store", func(t *testing.T) {
+			rec := f.do(t, http.MethodOptions, c.path, "", "", c.origin)
+			h := rec.Header()
+			if rec.Code != http.StatusNoContent || h.Get("Access-Control-Allow-Origin") != c.origin || h.Get("Access-Control-Allow-Methods") != http.MethodPost ||
+				!strings.Contains(h.Get("Access-Control-Allow-Headers"), "Authorization") || h.Get("Access-Control-Allow-Credentials") != "" ||
+				h.Get("Vary") != "Origin" || h.Get("Cache-Control") != "no-store" {
+				t.Fatalf("%d %v", rec.Code, h)
+			}
+		})
+	}
+	for _, c := range []struct {
+		name    string
+		origins []string
+	}{
+		{"null origin", []string{"null"}},
+		{"origin with a path", []string{"https://evil.test/"}},
+		{"origin not in canonical form", []string{"HTTPS://evil.test"}},
+		{"no Origin header", nil},
+		{"two Origin headers", []string{shop, "https://evil.test"}},
+	} {
+		t.Run("Preflight - "+c.name+" - 403 without CORS headers", func(t *testing.T) {
+			rec := f.do(t, http.MethodOptions, tokens, "", "", c.origins...)
+			if rec.Code != http.StatusForbidden || rec.Header().Get("Access-Control-Allow-Origin") != "" ||
+				rec.Header().Get("Vary") != "Origin" || rec.Header().Get("Cache-Control") != "no-store" {
+				t.Fatalf("%d %v", rec.Code, rec.Header())
+			}
+		})
+	}
 	t.Run("Key set - no token - 200 with one public key", func(t *testing.T) {
 		rec := f.do(t, http.MethodGet, widget.JWKSPath, "", "")
 		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"kty":"EC"`) || strings.Contains(rec.Body.String(), `"d":`) {

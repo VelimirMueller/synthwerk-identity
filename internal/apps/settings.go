@@ -53,17 +53,25 @@ func WidgetSettingsFrom(in identity.WidgetSettings) (WidgetSettings, error) {
 }
 
 // validGreeting: valid UTF-8, at most MaxGreetingLen characters, no control
-// character but a line break.
+// character but a line break, no bidi embedding, override or isolate.
 func validGreeting(s string) bool {
 	if !utf8.ValidString(s) || utf8.RuneCountInString(s) > MaxGreetingLen {
 		return false
 	}
 	for _, r := range s {
-		if r != '\n' && unicode.IsControl(r) {
+		if (r != '\n' && unicode.IsControl(r)) || isBidiControl(r) {
 			return false
 		}
 	}
 	return true
+}
+
+// isBidiControl: U+202A to U+202E (embeddings, overrides) and U+2066 to U+2069
+// (isolates). They can turn the text around on the page (Trojan Source). The
+// widget refuses the same set (synthwerk-widgets src/settings.ts), so a greeting
+// identity stores is a greeting the widget shows.
+func isBidiControl(r rune) bool {
+	return (r >= '\u202A' && r <= '\u202E') || (r >= '\u2066' && r <= '\u2069')
 }
 
 // API returns the settings in the contract type.

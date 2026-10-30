@@ -27,13 +27,18 @@ func TestWidgetSettingsFrom(t *testing.T) {
 		}
 	})
 	bad := map[string]func(*identity.WidgetSettings){
-		"free colour":        func(s *identity.WidgetSettings) { s.Accent = "#ff00ff" },
-		"unknown position":   func(s *identity.WidgetSettings) { s.Position = "top-left" },
-		"unknown language":   func(s *identity.WidgetSettings) { s.Lang = "fr" },
-		"empty mode":         func(s *identity.WidgetSettings) { s.Mode = "" },
-		"greeting too long":  func(s *identity.WidgetSettings) { s.Greeting = strings.Repeat("a", 281) },
-		"greeting with NUL":  func(s *identity.WidgetSettings) { s.Greeting = "a\x00b" },
-		"greeting not UTF-8": func(s *identity.WidgetSettings) { s.Greeting = "a\xffb" },
+		"free colour":              func(s *identity.WidgetSettings) { s.Accent = "#ff00ff" },
+		"unknown position":         func(s *identity.WidgetSettings) { s.Position = "top-left" },
+		"unknown language":         func(s *identity.WidgetSettings) { s.Lang = "fr" },
+		"empty mode":               func(s *identity.WidgetSettings) { s.Mode = "" },
+		"greeting too long":        func(s *identity.WidgetSettings) { s.Greeting = strings.Repeat("a", 281) },
+		"greeting with NUL":        func(s *identity.WidgetSettings) { s.Greeting = "a\x00b" },
+		"greeting not UTF-8":       func(s *identity.WidgetSettings) { s.Greeting = "a\xffb" },
+		"greeting with LRE U+202A": func(s *identity.WidgetSettings) { s.Greeting = "a\u202Ab" },
+		"greeting with RLO U+202E": func(s *identity.WidgetSettings) { s.Greeting = "Hallo \u202Etxt.exe" },
+		"greeting with LRI U+2066": func(s *identity.WidgetSettings) { s.Greeting = "a\u2066b" },
+		"greeting with PDI U+2069": func(s *identity.WidgetSettings) { s.Greeting = "a\u2069b" },
+		"greeting with CR":         func(s *identity.WidgetSettings) { s.Greeting = "a\rb" },
 	}
 	for name, change := range bad {
 		t.Run("Refused - "+name+" - ErrSettings", func(t *testing.T) {
@@ -41,6 +46,21 @@ func TestWidgetSettingsFrom(t *testing.T) {
 			change(&in)
 			if _, err := apps.WidgetSettingsFrom(in); !errors.Is(err, apps.ErrSettings) {
 				t.Fatalf("err %v", err)
+			}
+		})
+	}
+}
+
+func TestWidgetSettingsFromBidiNeighbours(t *testing.T) {
+	// The refused set is exactly U+202A..U+202E and U+2066..U+2069, the set the widget
+	// refuses. Letters of right-to-left scripts and the marks around the set pass.
+	valid := apps.DefaultWidgetSettings().API()
+	for _, g := range []string{"مرحبا بك", "שלום", "a\u2029b", "a\u206Ab", "a\u200Fb"} {
+		t.Run("Greeting - "+strings.ToValidUTF8(g, "?")+" - accepted", func(t *testing.T) {
+			in := valid
+			in.Greeting = g
+			if _, err := apps.WidgetSettingsFrom(in); err != nil {
+				t.Fatalf("%q: %v", g, err)
 			}
 		})
 	}
