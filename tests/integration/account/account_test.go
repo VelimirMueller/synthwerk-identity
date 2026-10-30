@@ -178,6 +178,69 @@ func TestDelete(t *testing.T) {
 		}
 	})
 
+	t.Run("Delete - invitations and audit rows - own invitations gone, audit rows pseudonymised, closed org's rows gone", func(t *testing.T) {
+		f := setup(t)
+		grant(t, f.orgs, zorg, bob, "owner")
+		grant(t, f.orgs, zorg, alice, "member")
+		grant(t, f.orgs, zsolo, alice, "owner")
+		shared, solo := org(t, f, zorg), org(t, f, zsolo)
+		ctx := t.Context()
+		for _, inv := range []struct {
+			email, by string
+			sub       any
+		}{
+			{"alice@example.test", bob, alice},               // alice is the invitee, by sub
+			{"Alice@Example.TEST", bob, nil},                 // alice is the invitee, by verified email only
+			{"carol@example.test", alice, nil},               // alice invited carol
+			{"dave@example.test", bob, "100000000000000004"}, // unrelated: stays
+		} {
+			if _, err := f.db.Exec(ctx, `INSERT INTO invitations (id, org_id, email, role, invited_by, user_sub, revoked_at)
+				VALUES (gen_random_uuid(), $1, $2, 'member', $3, $4, CASE WHEN $2 = 'alice@example.test' THEN now() END)`,
+				shared.ID, inv.email, inv.by, inv.sub); err != nil {
+				t.Fatal(err)
+			}
+		}
+		audit := func(orgID, actor, subject, data string) {
+			t.Helper()
+			if _, err := f.db.Exec(ctx, `INSERT INTO audit_events (id, org_id, type, actor, subject, time, data)
+				VALUES (gen_random_uuid(), $1, 'dev.synthwerk.identity.member.role_changed.v1', $2, $3, now(), $4::jsonb)`,
+				orgID, actor, subject, data); err != nil {
+				t.Fatal(err)
+			}
+		}
+		audit(shared.ID, "user:"+alice, alice, `{"org_id":"x","user_sub":"`+alice+`","role":"member"}`)
+		audit(shared.ID, "user:"+bob, alice, `{"org_id":"x","user_sub":"`+alice+`","old_role":"admin","new_role":"member"}`)
+		audit(shared.ID, "system", shared.ID, `{"org_id":"x","owner_sub":"`+alice+`","name":"n","slug":"s"}`)
+		audit(shared.ID, "user:"+bob, bob, `{"org_id":"x","user_sub":"`+bob+`","role":"owner"}`)
+		audit(solo.ID, "user:"+alice, alice, `{"org_id":"x","user_sub":"`+alice+`","role":"owner"}`)
+
+		kept := count(t, f.db, `SELECT count(*) FROM audit_events WHERE org_id = $1`, shared.ID)
+		if _, err := f.store.Delete(ctx, alice, "alice@example.test"); err != nil {
+			t.Fatal(err)
+		}
+		if n := count(t, f.db, `SELECT count(*) FROM invitations`); n != 1 {
+			t.Fatalf("invitations left %d, want only the unrelated one", n)
+		}
+		if count(t, f.db, `SELECT count(*) FROM invitations WHERE email = 'dave@example.test'`) != 1 {
+			t.Fatal("unrelated invitation gone")
+		}
+		if n := count(t, f.db, `SELECT count(*) FROM audit_events WHERE org_id = $1`, solo.ID); n != 0 {
+			t.Fatalf("audit rows of the closed org: %d", n)
+		}
+		if n := count(t, f.db, `SELECT count(*) FROM audit_events WHERE actor = 'user:' || $1 OR subject = $1 OR data::text LIKE '%' || $1 || '%'`, alice); n != 0 {
+			t.Fatalf("audit rows still name alice: %d", n)
+		}
+		if n := count(t, f.db, `SELECT count(*) FROM audit_events WHERE org_id = $1`, shared.ID); n != kept {
+			t.Fatalf("audit rows of the shared org: %d, want all %d kept", n, kept)
+		}
+		if count(t, f.db, `SELECT count(*) FROM audit_events WHERE actor = 'user:deleted-user' AND subject = 'deleted-user' AND data->>'user_sub' = 'deleted-user'`) != 1 ||
+			count(t, f.db, `SELECT count(*) FROM audit_events WHERE actor = 'user:'||$1 AND subject = 'deleted-user' AND data->>'user_sub' = 'deleted-user'`, bob) != 1 ||
+			count(t, f.db, `SELECT count(*) FROM audit_events WHERE actor = 'system' AND data->>'owner_sub' = 'deleted-user' AND data->>'name' = 'n'`) != 1 ||
+			count(t, f.db, `SELECT count(*) FROM audit_events WHERE actor = 'user:'||$1 AND subject = $1 AND data->>'user_sub' = $1`, bob) != 1 {
+			t.Fatal("audit rows not pseudonymised as expected")
+		}
+	})
+
 	t.Run("Delete - repeat - first time back, Repeat true, no second event", func(t *testing.T) {
 		f := setup(t)
 		grant(t, f.orgs, zsolo, alice, "owner")

@@ -17,10 +17,12 @@ import (
 	"github.com/VelimirMueller/synthwerk-identity/internal/orgs"
 )
 
-// Orgs finds the org of a request. *orgs.Store satisfies it.
+// Orgs finds the org of a request and the caller's membership. *orgs.Store satisfies it.
 type Orgs interface {
 	OrgByID(ctx context.Context, id string) (orgs.Org, error)
 	OrgByZitadelID(ctx context.Context, zitadelOrgID string) (orgs.Org, error)
+	// MemberRole returns orgs.ErrNotFound unless sub is an active member of org.
+	MemberRole(ctx context.Context, orgID, sub string) (orgs.Role, error)
 }
 
 // Repo reads entitlements. *Store satisfies it.
@@ -54,6 +56,9 @@ func (h *Handler) getMine(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	org, err := h.Orgs.OrgByZitadelID(r.Context(), p.OrgID)
+	if err == nil {
+		err = h.activeMember(r.Context(), org.ID, p.Subject)
+	}
 	h.answer(w, r, org, err)
 }
 
@@ -66,10 +71,22 @@ func (h *Handler) getOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	org, err := h.Orgs.OrgByID(r.Context(), r.PathValue("orgId"))
-	if err == nil && !p.IsOperator() && (org.ZitadelOrgID != p.OrgID || !orgs.TokenRole(p).Valid()) {
-		err = orgs.ErrNotFound
+	if err == nil && !p.IsOperator() {
+		if org.ZitadelOrgID != p.OrgID || !orgs.TokenRole(p).Valid() {
+			err = orgs.ErrNotFound
+		} else {
+			err = h.activeMember(r.Context(), org.ID, p.Subject)
+		}
 	}
 	h.answer(w, r, org, err)
+}
+
+// activeMember returns orgs.ErrNotFound unless sub is an active member of org. A
+// deactivated or invited member keeps an org role in an old token until it
+// expires; the stored status wins (synthwerk#37).
+func (h *Handler) activeMember(ctx context.Context, orgID, sub string) error {
+	_, err := h.Orgs.MemberRole(ctx, orgID, sub)
+	return err
 }
 
 func (h *Handler) answer(w http.ResponseWriter, r *http.Request, org orgs.Org, err error) {

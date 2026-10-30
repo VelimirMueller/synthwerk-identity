@@ -34,7 +34,7 @@ const (
 type Repo interface {
 	Memberships(ctx context.Context, sub string) ([]Membership, error)
 	Deleted(ctx context.Context, sub string) (Deletion, bool, error)
-	Delete(ctx context.Context, sub string) (Deletion, error)
+	Delete(ctx context.Context, sub string, emails ...string) (Deletion, error)
 }
 
 // Evidence reads the newest sign-in with MFA (mfagate.Postgres).
@@ -174,7 +174,7 @@ func (h *Handler) deleteMe(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, r, http.StatusForbidden, CodeRecentMFARequired, "Sign in again with MFA, then retry.")
 		return
 	}
-	d, err := h.Repo.Delete(ctx, p.Subject)
+	d, err := h.Repo.Delete(ctx, p.Subject, verifiedEmails(p)...)
 	var lo *LastOwnerError
 	switch {
 	case errors.As(err, &lo):
@@ -288,4 +288,16 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	_, _ = w.Write(buf.Bytes())
+}
+
+// verifiedEmails is the email claim of p when email_verified is true. An
+// unverified email never deletes the invitations of that address.
+func verifiedEmails(p *auth.Principal) []string {
+	if v, _ := p.Raw["email_verified"].(bool); !v {
+		return nil
+	}
+	if e, _ := p.Raw["email"].(string); e != "" {
+		return []string{e}
+	}
+	return nil
 }

@@ -49,3 +49,56 @@ func roleChanged(ctx context.Context, source string, org Org, sub string, from, 
 		cloudevents.WithDataSchema(RoleChangedSchema),
 	)
 }
+
+// Member events of synthwerk#37 (synthwerk-contracts events/identity).
+const (
+	MemberInvited             = "dev.synthwerk.identity.member.invited.v1"
+	MemberInvitedSchema       = "https://schemas.synthwerk.dev/events/identity/member.invited.v1.json"
+	MemberInviteRevoked       = "dev.synthwerk.identity.member.invite_revoked.v1"
+	MemberInviteRevokedSchema = "https://schemas.synthwerk.dev/events/identity/member.invite_revoked.v1.json"
+	MemberDeactivated         = "dev.synthwerk.identity.member.deactivated.v1"
+	MemberDeactivatedSchema   = "https://schemas.synthwerk.dev/events/identity/member.deactivated.v1.json"
+	MemberReactivated         = "dev.synthwerk.identity.member.reactivated.v1"
+	MemberReactivatedSchema   = "https://schemas.synthwerk.dev/events/identity/member.reactivated.v1.json"
+)
+
+// MemberFactData is the data of member.deactivated and member.reactivated: ids
+// and the role, no email.
+type MemberFactData struct {
+	OrgID   string `json:"org_id"`
+	UserSub string `json:"user_sub"`
+	Role    Role   `json:"role"`
+}
+
+func memberFact(ctx context.Context, typ, schema, source string, org Org, sub string, role Role, actor string) (cloudevents.Event, error) {
+	return cloudevents.New(ctx, typ, source,
+		MemberFactData{OrgID: org.ID, UserSub: sub, Role: role},
+		cloudevents.WithSubject(sub),
+		cloudevents.WithOrg(org.ID),
+		cloudevents.WithActor(actor),
+		cloudevents.WithDataSchema(schema),
+	)
+}
+
+// InvitedData is the data of member.invited: the invitation id and the role. No
+// email and no subject id, so the event is the same for every email.
+type InvitedData struct {
+	OrgID        string `json:"org_id"`
+	InvitationID string `json:"invitation_id"`
+	Role         Role   `json:"role"`
+}
+
+func invitedFact(ctx context.Context, source string, org Org, inv Invitation) (cloudevents.Event, error) {
+	return invitationFact(ctx, MemberInvited, MemberInvitedSchema, source, org, inv, inv.InvitedBy)
+}
+
+// invitationFact is member.invited or member.invite_revoked: the same data.
+func invitationFact(ctx context.Context, typ, schema, source string, org Org, inv Invitation, actorSub string) (cloudevents.Event, error) {
+	return cloudevents.New(ctx, typ, source,
+		InvitedData{OrgID: org.ID, InvitationID: inv.ID, Role: inv.Role},
+		cloudevents.WithSubject(inv.ID),
+		cloudevents.WithOrg(org.ID),
+		cloudevents.WithActor("user:"+actorSub),
+		cloudevents.WithDataSchema(schema),
+	)
+}

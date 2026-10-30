@@ -30,8 +30,11 @@ const (
 	owner    = "100000000000000001"
 	member   = "100000000000000004"
 	stranger = "100000000000000099" // token says member, the mirror has no row
-	platform = "300000000000000009"
-	shop     = "https://shop.example"
+	// deactivated: token says member, the stored membership is not active, so
+	// MemberRole answers ErrNotFound like the real store (synthwerk#37).
+	deactivated = "100000000000000098"
+	platform    = "300000000000000009"
+	shop        = "https://shop.example"
 )
 
 // fakeOrgs is orgs.Repo with one active org.
@@ -248,6 +251,7 @@ func TestWidgetToken(t *testing.T) {
 	}{
 		{"token of another org", tokens, f.tok(t, member, otherOrg, "member")},
 		{"no stored membership", tokens, f.tok(t, stranger, zorg, "member")},
+		{"deactivated member, token still has the role", tokens, f.tok(t, deactivated, zorg, "member")},
 		{"token without an org role", tokens, f.tok(t, member, zorg)},
 		{"unknown app", "/v1/apps/019a3b10-0000-7000-8000-000000000000/widget-tokens", memberTok},
 		{"malformed app id", "/v1/apps/not-a-uuid/widget-tokens", memberTok},
@@ -361,6 +365,11 @@ func TestAppRoutes(t *testing.T) {
 	t.Run("ListApps - member - 200 with one app", func(t *testing.T) {
 		rec := f.do(t, http.MethodGet, list, f.tok(t, member, zorg, "member"), "")
 		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), appID) {
+			t.Fatalf("%d %s", rec.Code, rec.Body)
+		}
+	})
+	t.Run("ListApps - deactivated member, token still has the role - 404", func(t *testing.T) {
+		if rec := f.do(t, http.MethodGet, list, f.tok(t, deactivated, zorg, "member"), ""); rec.Code != http.StatusNotFound {
 			t.Fatalf("%d %s", rec.Code, rec.Body)
 		}
 	})

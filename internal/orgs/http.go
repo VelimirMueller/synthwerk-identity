@@ -30,7 +30,12 @@ type Repo interface {
 // Handler serves the org routes of openapi/identity.
 type Handler struct {
 	Repo Repo
-	Log  *slog.Logger
+	// Members invites members and changes their status (synthwerk#37). Nil: those
+	// routes are off.
+	Members MemberWriter
+	// InviteLimit limits invites per caller and per org. Nil: NewInviteLimiter.
+	InviteLimit *InviteLimiter
+	Log         *slog.Logger
 }
 
 // Page sizes of listMembers.
@@ -49,6 +54,9 @@ func (h *Handler) Register(mux *http.ServeMux, authn func(http.Handler) http.Han
 	mux.Handle("GET /v1/orgs/{orgId}", authn(http.HandlerFunc(h.getOrg)))
 	mux.Handle("GET /v1/orgs/{orgId}/members", authn(http.HandlerFunc(h.listMembers)))
 	mux.Handle("PATCH /v1/orgs/{orgId}/members/{userId}", authn(http.HandlerFunc(h.changeMemberRole)))
+	if h.Members != nil {
+		h.registerMembers(mux, authn)
+	}
 }
 
 // access is the result of the org gate.
@@ -81,7 +89,41 @@ func (h *Handler) gate(w http.ResponseWriter, r *http.Request) (access, bool) {
 		writeProblem(w, r, http.StatusNotFound, codeNotFound, "")
 		return access{}, false
 	}
+	if a.own && !h.acceptInvite(w, r, org.ID, p.Subject) {
+		return access{}, false
+	}
+	if a.own {
+		// The token role can outlive the membership: a deactivated or invited member
+		// keeps it until the token expires. Only an active stored membership counts
+		// (synthwerk#37); anything else is no membership.
+		_, err := h.Repo.MemberRole(r.Context(), org.ID, p.Subject)
+		if err != nil && !errors.Is(err, ErrNotFound) {
+			h.fail(w, r, err)
+			return access{}, false
+		}
+		if err != nil {
+			a.own = false
+			if !p.IsOperator() {
+				writeProblem(w, r, http.StatusNotFound, codeNotFound, "")
+				return access{}, false
+			}
+		}
+	}
 	return a, true
+}
+
+// acceptInvite activates an invited member at its first call with a token of the
+// org (synthwerk#37). It writes 500 and returns false on a database error.
+func (h *Handler) acceptInvite(w http.ResponseWriter, r *http.Request, orgID, sub string) bool {
+	acc, ok := h.Repo.(InviteAcceptor)
+	if !ok || h.Members == nil {
+		return true
+	}
+	if err := acc.AcceptInvite(r.Context(), orgID, sub); err != nil {
+		h.fail(w, r, err)
+		return false
+	}
+	return true
 }
 
 func (h *Handler) getMe(w http.ResponseWriter, r *http.Request) {
@@ -97,6 +139,9 @@ func (h *Handler) getMe(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		h.fail(w, r, err)
+		return
+	}
+	if TokenRole(p).Valid() && !h.acceptInvite(w, r, org.ID, p.Subject) {
 		return
 	}
 	roles := []identity.Role{}
@@ -247,7 +292,11 @@ func orgBody(o Org) identity.Org {
 }
 
 func memberBody(m Membership) identity.Member {
-	return identity.Member{UserId: m.UserSub, Role: identity.OrgRole(m.Role), UpdatedAt: m.UpdatedAt.UTC()}
+	status := identity.MemberStatusActive
+	if m.Status == StatusDeactivated {
+		status = identity.MemberStatusDeactivated
+	}
+	return identity.Member{UserId: m.UserSub, Role: identity.OrgRole(m.Role), Status: status, UpdatedAt: m.UpdatedAt.UTC()}
 }
 
 // Problem codes of openapi/identity.
@@ -275,6 +324,9 @@ var titles = map[string]string{
 	codeInternal:             "Internal error",
 	codeOriginNotAllowed:     "Origin not allowed",
 	codeAppLimitReached:      "App limit reached",
+	codeMemberExists:         "Member exists",
+	codeOwnMembership:        "Own membership",
+	codeRateLimited:          "Rate limited",
 }
 
 type problem struct {
@@ -302,7 +354,9 @@ func writeProblem(w http.ResponseWriter, r *http.Request, status int, code, deta
 	_ = json.NewEncoder(w).Encode(p)
 }
 
-func writeJSON(w http.ResponseWriter, v any) {
+func writeJSON(w http.ResponseWriter, v any) { writeJSONStatus(w, http.StatusOK, v) }
+
+func writeJSONStatus(w http.ResponseWriter, status int, v any) {
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(v); err != nil {
 		http.Error(w, "encode", http.StatusInternalServerError)
@@ -310,6 +364,6 @@ func writeJSON(w http.ResponseWriter, v any) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(status)
 	_, _ = w.Write(buf.Bytes())
 }
