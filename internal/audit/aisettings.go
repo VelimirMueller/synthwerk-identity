@@ -386,8 +386,9 @@ func (c *Consumer) Handle(ctx context.Context, m jetstream.Msg) {
 	rctx, cancel := context.WithTimeout(ctx, max(c.cfg.AckWait-5*time.Second, c.cfg.AckWait/2))
 	defer cancel()
 	inserted, err := c.rec.Record(rctx, ch)
+	unknownOrg := errors.Is(err, ErrUnknownOrg)
 	switch {
-	case errors.Is(err, ErrUnknownOrg):
+	case unknownOrg:
 		c.log.InfoContext(ctx, "ai_settings event of an unknown org dropped",
 			slog.String("event.name", "identity.audit.llm_unknown_org"),
 			slog.String("cloudevents.event_id", ch.ID))
@@ -408,7 +409,7 @@ func (c *Consumer) Handle(ctx context.Context, m jetstream.Msg) {
 			slog.String("cloudevents.event_id", ch.ID))
 		return
 	}
-	if err == nil {
+	if !unknownOrg {
 		c.log.InfoContext(ctx, "ai_settings change recorded",
 			slog.String("event.name", "identity.audit.llm_recorded"),
 			slog.String("cloudevents.event_id", ch.ID),
