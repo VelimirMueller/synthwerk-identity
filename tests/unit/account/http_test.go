@@ -74,8 +74,16 @@ func fresh(age time.Duration) fakeEvidence {
 	return fakeEvidence{e: &mfagate.Evidence{UserSub: sub, SessionID: "s-1", AMR: []string{"pwd", "otp", "mfa"}, CheckedAt: now.Add(-age)}}
 }
 
+// user is a token of the session "s-1", the session of fresh().
 func user(amr ...string) *auth.Principal {
-	return &auth.Principal{Subject: sub, OrgID: "300000000000000001", Roles: []string{"owner"}, AMR: amr}
+	return &auth.Principal{Subject: sub, OrgID: "300000000000000001", Roles: []string{"owner"}, AMR: amr,
+		Raw: map[string]any{"sid": "s-1"}}
+}
+
+// withRaw is p with the token claims raw instead of the default sid.
+func withRaw(p *auth.Principal, raw map[string]any) *auth.Principal {
+	p.Raw = raw
+	return p
 }
 
 // serve runs one request as p (nil: no principal) with the bearer token "user-token".
@@ -147,11 +155,32 @@ func TestDeleteMe(t *testing.T) {
 		{"gated sign-in 16 min old", user("mfa"), fresh(16 * time.Minute)},
 		{"evidence from the future", user("mfa"), fresh(-2 * time.Minute)},
 		{"evidence without mfa", user("mfa"), fakeEvidence{e: &mfagate.Evidence{AMR: []string{"pwd"}, CheckedAt: now}}},
+		{"token of another session, fresh MFA sign-in elsewhere", withRaw(user("mfa"), map[string]any{"sid": "s-old"}), fresh(time.Minute)},
+		{"token without sid, auth_time 2 h old", withRaw(user("mfa"), map[string]any{"auth_time": float64(now.Add(-2 * time.Hour).Unix())}), fresh(time.Minute)},
+		{"token without sid, no auth_time, iat 2 h old", withRaw(user("mfa"), map[string]any{"iat": float64(now.Add(-2 * time.Hour).Unix())}), fresh(time.Minute)},
+		{"token without sid, auth_time or iat", withRaw(user("mfa"), nil), fresh(time.Minute)},
 	} {
 		t.Run("DeleteMe - "+tc.name+" - 403 recent_mfa_required, nothing deleted", func(t *testing.T) {
 			repo := &fakeRepo{}
 			rec := serve(t, &account.Handler{Repo: repo, Evidence: tc.ev}, tc.p, http.MethodDelete, "/v1/me")
 			if rec.Code != http.StatusForbidden || problemCode(t, rec) != account.CodeRecentMFARequired || repo.calls != 0 {
+				t.Fatalf("status %d, calls %d: %s", rec.Code, repo.calls, rec.Body)
+			}
+		})
+	}
+
+	for _, tc := range []struct {
+		name string
+		raw  map[string]any
+	}{
+		{"same session", map[string]any{"sid": "s-1"}},
+		{"no sid, auth_time 5 min old", map[string]any{"auth_time": float64(now.Add(-5 * time.Minute).Unix())}},
+		{"no sid, no auth_time, iat 5 min old", map[string]any{"iat": float64(now.Add(-5 * time.Minute).Unix())}},
+	} {
+		t.Run("DeleteMe - "+tc.name+", MFA sign-in within max age - 202", func(t *testing.T) {
+			repo := &fakeRepo{}
+			rec := serve(t, &account.Handler{Repo: repo, Evidence: fresh(5 * time.Minute)}, withRaw(user("mfa"), tc.raw), http.MethodDelete, "/v1/me")
+			if rec.Code != http.StatusAccepted || repo.calls != 1 {
 				t.Fatalf("status %d, calls %d: %s", rec.Code, repo.calls, rec.Body)
 			}
 		})

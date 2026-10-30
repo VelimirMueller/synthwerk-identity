@@ -36,6 +36,7 @@ updated: 2026-10-30
 | Rule | Value |
 |---|---|
 | Recent MFA | Token `amr` has `mfa`, and the newest gated sign-in is at most `SYNTHWERK_IDENTITY_ACCOUNT_DELETE_MFA_MAX_AGE` old (default 15m, max 12h). Else 403 `recent_mfa_required`. |
+| Same session | A token with `sid` needs the newest gated sign-in from that session. A token without `sid` needs its `auth_time` (else `iat`) within the same max age. Else 403 `recent_mfa_required`. |
 | Operator | 403 `forbidden`. Platform users are never removed here. |
 | Last owner | Only owner of an active org with other members: 409 `last_owner`, nothing changes. The org row lock and the deferred owner trigger guard parallel deletes and role changes. |
 | Only member | The org closes with the account: org, apps, plan deleted. Its ids go into `deleted_org_ids` and the event. The Zitadel org stays. |
@@ -68,6 +69,7 @@ updated: 2026-10-30
 - `tests/integration/account/account_test.go` — `Delete - invitations and audit rows - own invitations gone, audit rows pseudonymised, closed org's rows gone`
 - `tests/unit/account/http_test.go` — `DeleteMe - token with mfa, gated sign-in 5 min old - 202 with the closed org`
 - `tests/unit/account/http_test.go` — `DeleteMe - token without amr mfa / no gated sign-in stored / gated sign-in 16 min old / evidence from the future / evidence without mfa - 403 recent_mfa_required, nothing deleted`
+- `tests/unit/account/http_test.go` — `DeleteMe - token of another session, fresh MFA sign-in elsewhere / token without sid, auth_time 2 h old / ... iat 2 h old / ... auth_time or iat - 403 recent_mfa_required`; `DeleteMe - same session / no sid, auth_time 5 min old / no sid, no auth_time, iat 5 min old, MFA sign-in within max age - 202`
 - `tests/unit/account/http_test.go` — `DeleteMe - operator - 403 forbidden`; `last owner of an org with members - 409 last_owner naming the org`; `repeat with the old token - 202 with the first time`
 - `tests/unit/account/http_test.go` — `ExportMe - identity rows, evidence and the llm part - 200 attachment, data unchanged, token forwarded`
 - `tests/unit/account/http_test.go` — `ExportMe - source answers 503 / HTML / a JSON array / broken JSON / redirects - 200, service unavailable, complete false`
@@ -84,3 +86,4 @@ updated: 2026-10-30
 |---|---|
 | 2026-10-30 | First version (synthwerk#41). |
 | 2026-10-30 | Delete also removes the user's invitations and pseudonymises the user in audit rows (synthwerk#37 merge). |
+| 2026-10-30 | The recent-MFA check is bound to the token's session (`sid`, else `auth_time` or `iat`) (synthwerk#41 security review). |

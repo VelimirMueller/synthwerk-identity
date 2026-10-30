@@ -193,9 +193,14 @@ func (h *Handler) deleteMe(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// recentMFA: the token has amr mfa, and the user's newest gated sign-in is at most
-// MFAMaxAge old. The token alone is not enough: its amr may come from a sign-in up
-// to 12 h ago (mfagate.DefaultMaxAge).
+// recentMFA: the token has amr mfa, the user's newest gated sign-in is at most
+// MFAMaxAge old, and that sign-in belongs to this token. The token alone is not
+// enough: its amr may come from a sign-in up to 12 h ago (mfagate.DefaultMaxAge).
+// The evidence alone is not enough either: it may come from another session, so
+// an older or stolen token could ride on a fresh MFA sign-in elsewhere.
+//
+// Session binding: a token with a "sid" claim needs evidence of that session. A
+// token without "sid" needs its own "auth_time" (else "iat") within MFAMaxAge.
 func (h *Handler) recentMFA(ctx context.Context, p *auth.Principal) (bool, error) {
 	if !p.HasMFA() {
 		return false, nil
@@ -211,8 +216,48 @@ func (h *Handler) recentMFA(ctx context.Context, p *auth.Principal) (bool, error
 	if maxAge <= 0 {
 		maxAge = DefaultMFAMaxAge
 	}
-	age := h.now().Sub(e.CheckedAt)
-	return age <= maxAge && age >= -time.Minute && slices.Contains(e.AMR, mfagate.AMRMFA), nil
+	now := h.now()
+	fresh := func(t time.Time) bool {
+		age := now.Sub(t)
+		return age <= maxAge && age >= -time.Minute
+	}
+	if !fresh(e.CheckedAt) || !slices.Contains(e.AMR, mfagate.AMRMFA) {
+		return false, nil
+	}
+	if sid, _ := p.Raw["sid"].(string); sid != "" {
+		return e.SessionID == sid, nil
+	}
+	for _, claim := range []string{"auth_time", "iat"} {
+		if t, ok := unixClaim(p.Raw[claim]); ok {
+			return fresh(t), nil
+		}
+	}
+	return false, nil
+}
+
+// unixClaim reads a NumericDate claim (seconds since the epoch).
+func unixClaim(v any) (time.Time, bool) {
+	var sec float64
+	switch n := v.(type) {
+	case float64:
+		sec = n
+	case int64:
+		sec = float64(n)
+	case int:
+		sec = float64(n)
+	case json.Number:
+		f, err := n.Float64()
+		if err != nil {
+			return time.Time{}, false
+		}
+		sec = f
+	default:
+		return time.Time{}, false
+	}
+	if sec <= 0 {
+		return time.Time{}, false
+	}
+	return time.Unix(int64(sec), 0), true
 }
 
 func deletionBody(d Deletion) identity.AccountDeletion {
