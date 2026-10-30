@@ -8,7 +8,7 @@ paths: ["internal/mfagate/**", "internal/zitadel/client.go", "migrations/0005_mf
 api: []
 events: []
 mcp: []
-updated: 2026-10-29
+updated: 2026-10-30
 ---
 
 # MFA gate
@@ -78,3 +78,4 @@ updated: 2026-10-29
 | Date | Change |
 |---|---|
 | 2026-10-29 | First version (synthwerk#94). |
+| 2026-10-30 | `cmd/identity/main.go` also starts the `EVT_LLM` consumer of the audit list (synthwerk#39). No change to this feature. |

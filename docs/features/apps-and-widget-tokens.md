@@ -96,3 +96,4 @@ updated: 2026-10-30
 |---|---|
 | 2026-10-29 | First version (synthwerk#30). |
 | 2026-10-30 | Widget settings, the public settings route, `apps_per_org` enforced, `Vary: Origin` on every widget route answer (synthwerk#38). |
+| 2026-10-30 | `cmd/identity/main.go` also starts the `EVT_LLM` consumer of the audit list (synthwerk#39). No change to this feature. |

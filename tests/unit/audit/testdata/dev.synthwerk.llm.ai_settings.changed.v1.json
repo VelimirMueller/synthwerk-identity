@@ -1,0 +1,24 @@
+{
+  "specversion": "1.0",
+  "id": "019a3d40-2b3c-7d4e-8f5a-6b7c8d9e0f1a",
+  "source": "/synthwerk/llm/dev",
+  "type": "dev.synthwerk.llm.ai_settings.changed.v1",
+  "subject": "0199f3a0-5b6c-7d8e-9f0a-1b2c3d4e5f60",
+  "time": "2026-10-30T10:00:00Z",
+  "datacontenttype": "application/json",
+  "dataschema": "https://schemas.synthwerk.dev/events/llm/ai_settings.changed.v1.json",
+  "orgid": "0199f3a0-5b6c-7d8e-9f0a-1b2c3d4e5f60",
+  "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+  "actor": "user:283746192837461928",
+  "data": {
+    "org_id": "0199f3a0-5b6c-7d8e-9f0a-1b2c3d4e5f60",
+    "version": 3,
+    "changed": ["max_input_chars", "system_prompt"],
+    "model": "default",
+    "allowed_models": ["default", "small"],
+    "max_input_chars": 2000,
+    "user_tokens_per_day": 20000,
+    "system_prompt_chars": 52,
+    "temperature": 0.3
+  }
+}

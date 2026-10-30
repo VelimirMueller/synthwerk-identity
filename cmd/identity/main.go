@@ -1,8 +1,8 @@
 // Command identity serves synthwerk-identity: health probes, migrations, the org
 // routes (orgs, members, roles; synthwerk#29; invite, deactivate and the audit list;
 // synthwerk#37), apps and widget tokens (synthwerk#30), the export and delete of the
-// own account (synthwerk#41), the Zitadel Action hook, the outbox relay and the
-// Zitadel user remover.
+// own account (synthwerk#41), the Zitadel Action hook, the outbox relay, the
+// EVT_LLM consumer of the audit list (synthwerk#39) and the Zitadel user remover.
 //
 //	identity              run the service
 //	identity healthcheck  exit 0 when /readyz answers 200 (container health check)
@@ -24,7 +24,8 @@
 //	SYNTHWERK_IDENTITY_WIDGET_ISSUER     iss of widget tokens: the public URL of identity. Required with the key.
 //	SYNTHWERK_IDENTITY_WIDGET_AUDIENCE   aud of widget tokens, comma-separated, default synthwerk-api
 //	SYNTHWERK_IDENTITY_WIDGET_TOKEN_TTL  widget token lifetime, 1m to 15m, default 10m
-//	SYNTHWERK_IDENTITY_NATS_URL          NATS with credentials (secret). Unset = no relay; events stay in the outbox.
+//	SYNTHWERK_IDENTITY_NATS_URL          NATS with credentials (secret). Unset = no relay; events stay in the outbox,
+//	                                     and no AI settings changes of llm reach the audit list (synthwerk#39).
 //	SYNTHWERK_IDENTITY_ZITADEL_API_URL   Zitadel API inside the stack, for example http://zitadel:8080.
 //	SYNTHWERK_IDENTITY_ZITADEL_HOST      instance host Zitadel expects, for example auth.localhost:8080.
 //	SYNTHWERK_IDENTITY_ZITADEL_PAT_FILE  file with the PAT of the machine user that manages user grants (secret).
@@ -207,8 +208,9 @@ func run(ctx context.Context) error {
 		logger.WarnContext(ctx, "no token issuer: org routes off", slog.String("event.name", "orgs.off"))
 	}
 
-	// Outbox relay to EVT_IDENTITY, when NATS is set.
+	// Outbox relay to EVT_IDENTITY and the EVT_LLM consumer of the audit list, when NATS is set.
 	var relay *outbox.Relay
+	var aiSettings *audit.Consumer
 	if natsURL := env.Get(app.Service, "NATS_URL", ""); natsURL != "" {
 		nc, err := nats.Connect(natsURL, nats.Name("synthwerk-"+app.Service), nats.MaxReconnects(-1))
 		if err != nil {
@@ -231,6 +233,9 @@ func run(ctx context.Context) error {
 			}
 			return nil
 		}
+		// llm owns EVT_LLM: the consumer waits for it and never creates it.
+		aiSettings = audit.NewConsumer(js, &audit.Writer{DB: db}, logger, audit.ConsumerConfig{})
+		appCfg.AISettings = aiSettings.Ready
 	}
 
 	// 4. App and migrations. /readyz answers 503 until here.
@@ -279,6 +284,9 @@ func run(ctx context.Context) error {
 	g, gctx := errgroup.WithContext(ctx)
 	if relay != nil {
 		g.Go(func() error { return relay.Run(gctx) })
+	}
+	if aiSettings != nil {
+		g.Go(func() error { return aiSettings.Run(gctx) })
 	}
 	if zc != nil {
 		rm := &account.Remover{DB: db, Users: zc, Log: logger}

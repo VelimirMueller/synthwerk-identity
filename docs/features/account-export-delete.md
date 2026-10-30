@@ -87,3 +87,4 @@ updated: 2026-10-30
 | 2026-10-30 | First version (synthwerk#41). |
 | 2026-10-30 | Delete also removes the user's invitations and pseudonymises the user in audit rows (synthwerk#37 merge). |
 | 2026-10-30 | The recent-MFA check is bound to the token's session (`sid`, else `auth_time` of the same sign-in) (synthwerk#41 security review). |
+| 2026-10-30 | The audit rows of llm AI settings changes also get `deleted-user`; a late llm event of a deleted user is stored with `user:deleted-user` (synthwerk#39). |

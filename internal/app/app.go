@@ -49,6 +49,9 @@ type Config struct {
 	Account *account.Handler
 	// Audit serves the audit list of an org (synthwerk#37). Needs Orgs.
 	Audit *audit.Handler
+	// AISettings reports the EVT_LLM consumer of the audit list for /readyz (not
+	// critical, synthwerk#39). Nil: no check.
+	AISettings func(ctx context.Context) error
 }
 
 // Pinger checks the database connection. *pgxpool.Pool satisfies it.
@@ -68,6 +71,10 @@ func New(pinger Pinger, logger *slog.Logger, cfg Config) (*App, error) {
 	checks := []health.Check{{Name: "postgres", Critical: true, Run: pinger.Ping, Detail: "postgres unreachable"}}
 	if cfg.NATS != nil {
 		checks = append(checks, health.Check{Name: "nats", Critical: true, Run: cfg.NATS, Detail: "nats not connected"})
+	}
+	if cfg.AISettings != nil {
+		// Not critical: llm creates EVT_LLM; until then the events wait there.
+		checks = append(checks, health.Check{Name: "llm_ai_settings", Run: cfg.AISettings, Detail: "ai_settings consumer not attached"})
 	}
 	if cfg.Verifier != nil {
 		// Not critical: a token check fails closed (401/503) while the keys are away.

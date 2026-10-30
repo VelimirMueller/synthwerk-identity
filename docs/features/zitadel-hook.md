@@ -79,3 +79,4 @@ updated: 2026-10-30
 | 2026-10-28 | Mirror user grant events into memberships (synthwerk#29). |
 | 2026-10-29 | The listener also serves the MFA gate (synthwerk#94). |
 | 2026-10-30 | Grant events of a deleted account are ignored (synthwerk#41). |
+| 2026-10-30 | `cmd/identity/main.go` also starts the `EVT_LLM` consumer of the audit list (synthwerk#39). No change to this feature. |

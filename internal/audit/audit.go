@@ -4,6 +4,9 @@
 // identity event with a known org into identity.audit_events, in the transaction
 // of the change. The outbox deletes published rows after 7 days; this table keeps
 // them. The list shows them newest first to owners and admins of the org.
+//
+// The list also holds the AI settings changes of llm (synthwerk#39): a JetStream
+// consumer copies them from EVT_LLM (aisettings.go).
 package audit
 
 import (
