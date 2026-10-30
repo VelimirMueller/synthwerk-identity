@@ -178,7 +178,7 @@ func newUsersClient(t *testing.T, f *zitadelFake) *zitadel.Client {
 	t.Helper()
 	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
-	return &zitadel.Client{BaseURL: srv.URL, Host: "auth.localhost:8080", ProjectID: "proj-1", Token: func() (string, error) { return "pat", nil }}
+	return &zitadel.Client{BaseURL: srv.URL, Host: "auth.localhost:8080", Project: &zitadel.Project{ID: "proj-1"}, Token: func() (string, error) { return "pat", nil }}
 }
 
 func TestInvite(t *testing.T) {

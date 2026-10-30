@@ -71,6 +71,9 @@ var (
 	ErrNotFound = errors.New("orgs: not found")
 	// ErrUpstream: Zitadel did not take the change; nothing changed (502).
 	ErrUpstream = errors.New("orgs: zitadel did not take the change")
+	// ErrNotReady: identity does not know the Zitadel project id yet; the Zitadel
+	// setup (zitadel-bootstrap) has not finished. Nothing changed (503, retry).
+	ErrNotReady = errors.New("orgs: zitadel project id not known yet")
 )
 
 // Authorize applies the rule table of spec #29 to a role change. actor is the

@@ -240,6 +240,8 @@ func (h *Handler) changeMemberRole(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrLastOwner):
 		h.refused(r, a, target, codeLastOwner)
 		writeProblem(w, r, http.StatusConflict, codeLastOwner, "The org must keep at least one owner.")
+	case errors.Is(err, ErrNotReady):
+		writeNotReady(w, r)
 	case errors.Is(err, ErrUpstream):
 		h.Log.ErrorContext(r.Context(), "role change: zitadel refused", slog.String("event.name", "orgs.role_change_upstream_failed"),
 			slog.String("exception.message", err.Error()))
@@ -352,6 +354,18 @@ func writeProblem(w http.ResponseWriter, r *http.Request, status int, code, deta
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(p)
+}
+
+// NotReadyRetryAfter is the Retry-After of a 503 for a Zitadel setup that has not
+// finished (ErrNotReady), in seconds.
+const NotReadyRetryAfter = "5"
+
+// writeNotReady answers ErrNotReady: 503 upstream_unavailable with Retry-After.
+// Nothing changed; the same call works once zitadel-bootstrap has written the
+// project id.
+func writeNotReady(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Retry-After", NotReadyRetryAfter)
+	writeProblem(w, r, http.StatusServiceUnavailable, codeUpstream, "The Zitadel setup is not finished. Retry later.")
 }
 
 func writeJSON(w http.ResponseWriter, v any) { writeJSONStatus(w, http.StatusOK, v) }

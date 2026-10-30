@@ -33,13 +33,15 @@ updated: 2026-10-30
 - A repeat invite of an email with a pending invitation (any case) answers 202 with that invitation, unchanged. No Zitadel call, no event: the answer never shows whether the first invite made a user.
 - `DELETE /v1/orgs/{orgId}/invitations/{invitationId}` revokes a pending invitation (owner or admin; only owner for an `owner` invitation): `revoked_at` is set, the `invited` row is deleted, the Zitadel user identity made for it is deleted, `member.invite_revoked` is written. A revoked invitation is never accepted. When the invitee is an active or deactivated member by now, only the invitation is revoked: the member row and the Zitadel user stay, and only an owner revokes when that member is an owner.
 - `POST /v1/orgs/{orgId}/members/{userId}:deactivate` and `:reactivate` set `status` on the row, write `member.deactivated` or `member.reactivated` and switch the Zitadel user grant off or on, in one transaction.
+- A grant deactivated or reactivated directly in Zitadel sets the same status and writes the same event with actor `system` ([zitadel-hook](zitadel-hook.md)). A reactivate counts only when Zitadel confirms the grant is active now.
+- Until identity knows the Zitadel project id, an invite (and a status change without a stored grant id) answers 503 `upstream_unavailable` with `Retry-After: 5`. Nothing changes.
 - A deactivated member fails every stored-role check (members list, role change, apps, widget token, audit list). Every route behind the org gate (`GET /v1/orgs/{orgId}`, apps, audit list) and both entitlements routes also need an active stored membership: a deactivated member with a token that still has the role gets 404, the same as an unknown org.
 - The outbox relay publishes to stream `EVT_IDENTITY` (`evt.identity.>`), which identity creates at start.
 
 ## How to use
 
 1. Set `SYNTHWERK_IDENTITY_OIDC_ISSUER` (and `OIDC_AUDIENCE`, `JWKS_URL`). Unset: the org routes are off.
-2. Set `SYNTHWERK_IDENTITY_ZITADEL_API_URL`, `ZITADEL_HOST`, `ZITADEL_PAT_FILE`, `ZITADEL_PROJECT_ID` so role changes reach Zitadel. Unset: changes stay in identity (warning at start).
+2. Set `SYNTHWERK_IDENTITY_ZITADEL_API_URL`, `ZITADEL_HOST`, `ZITADEL_PAT_FILE` and `ZITADEL_PROJECT_ID` or `ZITADEL_PROJECT_ID_FILE` so role changes reach Zitadel. Unset: changes stay in identity (warning at start). The file is for stacks where the bootstrap makes the project after identity starts.
 3. Set `SYNTHWERK_IDENTITY_PLATFORM_ORG_ID` to the Zitadel org that grants `operator`.
 4. Set `SYNTHWERK_IDENTITY_NATS_URL` to publish the outbox. Unset: rows stay in the outbox.
 5. Invites need the Zitadel client and, for `identity-sync`, the org role `ORG_USER_MANAGER` in each customer org (user create and invite code). `PROJECT_GRANT_OWNER` (ADR-0003) covers the user grant and deactivate only. Without it, an invite answers 502 and nothing changes.
@@ -108,6 +110,7 @@ updated: 2026-10-30
 | 2026-10-29 | Activation also writes the free plan and `org.entitlements_changed` (synthwerk#31). |
 | 2026-10-30 | Invite, deactivate and reactivate members; member `status`; owner guard counts active owners (synthwerk#37). |
 | 2026-10-30 | Pending invitations, no account enumeration, invite rate limit, fail-closed repair after a failed commit (synthwerk#37 security review). |
+| 2026-10-30 | Project id from a file (invites answer 503 until it is known); grant deactivate and reactivate in Zitadel set the member status (synthwerk#37). |
 | 2026-10-30 | Repeat invite returns the pending invitation; revoke a pending invitation; `member_exists` only for listed members (synthwerk#37 security review). |
 | 2026-10-30 | The org gate and the entitlements routes need an active stored membership: a deactivated member with an old token gets 404 (synthwerk#37 security review). |
 | 2026-10-30 | `/readyz` has the not-critical check `llm_ai_settings`: the `EVT_LLM` consumer of the audit list (synthwerk#39, `docs/features/audit-list.md`). |

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -358,6 +359,19 @@ func TestMemberRoutes(t *testing.T) {
 			}
 		})
 	}
+	t.Run("Member writes - Zitadel project id not known yet - 503 with Retry-After, not 502", func(t *testing.T) {
+		w.err = fmt.Errorf("%w: %w", orgs.ErrUpstream, orgs.ErrNotReady)
+		defer func() { w.err = nil }()
+		for _, rec := range []*httptest.ResponseRecorder{
+			call(t, h, http.MethodPost, members, owner, `{"email":"ada@example.com","role":"member"}`),
+			call(t, h, http.MethodPost, members+"/"+memSub+":deactivate", owner, ""),
+		} {
+			if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != orgs.NotReadyRetryAfter ||
+				!strings.Contains(rec.Body.String(), `"code":"upstream_unavailable"`) {
+				t.Fatalf("%d %v %s", rec.Code, rec.Header(), rec.Body)
+			}
+		}
+	})
 }
 
 func TestInviteRateLimit(t *testing.T) {
