@@ -91,3 +91,4 @@ updated: 2026-10-30
 | 2026-10-30 | Grant events of a deleted account are ignored (synthwerk#41). |
 | 2026-10-30 | `cmd/identity/main.go` also starts the `EVT_LLM` consumer of the audit list (synthwerk#39). No change to this feature. |
 | 2026-10-30 | Project id from a file written by the bootstrap; grant deactivate and reactivate events set the member status (synthwerk#37). |
+| 2026-10-30 | `cmd/identity/main.go` also starts the `EVT_STUDIO` consumer of the audit list (synthwerk#106). No change to this feature. |

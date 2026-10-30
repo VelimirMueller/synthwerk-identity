@@ -94,3 +94,4 @@ updated: 2026-10-30
 | 2026-10-30 | The delete reads the recent sign-in from a fresh ID token in `X-Synthwerk-Id-Token`: Zitadel v4.20 access tokens carry no `sid` and no `auth_time` (synthwerk-infra#18). New settings `ID_TOKEN_CLIENT_IDS`, `ID_TOKEN_CLIENT_FILE`. |
 | 2026-10-30 | The audit rows of llm AI settings changes also get `deleted-user`; a late llm event of a deleted user is stored with `user:deleted-user` (synthwerk#39). |
 | 2026-10-30 | Delete first takes the user lock (`LockUser`, advisory, key from the sub hash); the llm audit consumer takes it too, so no audit row keeps the clear sub (synthwerk#39 security review). |
+| 2026-10-30 | `cmd/identity/main.go` also starts the `EVT_STUDIO` consumer of the audit list (synthwerk#106). No change to this feature. |

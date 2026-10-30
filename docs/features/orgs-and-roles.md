@@ -114,3 +114,4 @@ updated: 2026-10-30
 | 2026-10-30 | Repeat invite returns the pending invitation; revoke a pending invitation; `member_exists` only for listed members (synthwerk#37 security review). |
 | 2026-10-30 | The org gate and the entitlements routes need an active stored membership: a deactivated member with an old token gets 404 (synthwerk#37 security review). |
 | 2026-10-30 | `/readyz` has the not-critical check `llm_ai_settings`: the `EVT_LLM` consumer of the audit list (synthwerk#39, `docs/features/audit-list.md`). |
+| 2026-10-30 | `/readyz` has the not-critical check `studio_pages`: the `EVT_STUDIO` consumer of the audit list (synthwerk#106, `docs/features/audit-list.md`). |

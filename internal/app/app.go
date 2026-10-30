@@ -52,6 +52,9 @@ type Config struct {
 	// AISettings reports the EVT_LLM consumer of the audit list for /readyz (not
 	// critical, synthwerk#39). Nil: no check.
 	AISettings func(ctx context.Context) error
+	// StudioPages reports the EVT_STUDIO consumer of the audit list for /readyz (not
+	// critical, synthwerk#106). Nil: no check.
+	StudioPages func(ctx context.Context) error
 }
 
 // Pinger checks the database connection. *pgxpool.Pool satisfies it.
@@ -75,6 +78,10 @@ func New(pinger Pinger, logger *slog.Logger, cfg Config) (*App, error) {
 	if cfg.AISettings != nil {
 		// Not critical: llm creates EVT_LLM; until then the events wait there.
 		checks = append(checks, health.Check{Name: "llm_ai_settings", Run: cfg.AISettings, Detail: "ai_settings consumer not attached"})
+	}
+	if cfg.StudioPages != nil {
+		// Not critical: studio creates EVT_STUDIO; until then the events wait in its outbox.
+		checks = append(checks, health.Check{Name: "studio_pages", Run: cfg.StudioPages, Detail: "studio page consumer not attached"})
 	}
 	if cfg.Verifier != nil {
 		// Not critical: a token check fails closed (401/503) while the keys are away.

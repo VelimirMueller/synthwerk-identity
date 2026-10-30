@@ -112,3 +112,4 @@ updated: 2026-10-30
 | 2026-10-30 | `cmd/identity/main.go` also starts the `EVT_LLM` consumer of the audit list (synthwerk#39). No change to this feature. |
 | 2026-10-30 | Internal route `GET /internal/v1/widget-origins` and GIN index 0010: llm answers CORS for the widget chat (infra#21). |
 | 2026-10-30 | Token preflight open to every canonical origin, readable 403 `origin_not_allowed` (widgets#41). Greeting refuses bidi controls like the widget. |
+| 2026-10-30 | `cmd/identity/main.go` also starts the `EVT_STUDIO` consumer of the audit list (synthwerk#106). No change to this feature. |
