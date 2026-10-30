@@ -42,10 +42,22 @@ type Evidence interface {
 	Latest(ctx context.Context, userSub string) (mfagate.Evidence, error)
 }
 
+// IDTokenHeader carries a fresh OIDC ID token on DELETE /v1/me: the proof of a
+// recent sign-in with MFA (openapi/identity, spec 0.7.0).
+const IDTokenHeader = "X-Synthwerk-Id-Token" //nolint:gosec // G101: a header name, not a credential
+
+// IDTokens verifies the ID token of IDTokenHeader for the caller's subject
+// (auth.IDTokenVerifier).
+type IDTokens interface {
+	Verify(ctx context.Context, raw, subject string) (*auth.IDToken, error)
+}
+
 // Handler serves GET /v1/me/export and DELETE /v1/me.
 type Handler struct {
 	Repo     Repo
 	Evidence Evidence
+	// IDTokens checks IDTokenHeader. Nil: a delete with the header is refused.
+	IDTokens IDTokens
 	// Fetcher asks the other services. Nil: the export holds identity rows only.
 	Fetcher *Fetcher
 	Log     *slog.Logger
@@ -166,11 +178,11 @@ func (h *Handler) deleteMe(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusAccepted, deletionBody(d))
 		return
 	}
-	if ok, err := h.recentMFA(ctx, p); err != nil {
+	if reason, err := h.recentMFA(ctx, p, r.Header.Get(IDTokenHeader)); err != nil {
 		h.fail(w, r, err)
 		return
-	} else if !ok {
-		h.refused(r, p.Subject, CodeRecentMFARequired)
+	} else if reason != "" {
+		h.refused(r, p.Subject, reason)
 		writeProblem(w, r, http.StatusForbidden, CodeRecentMFARequired, "Sign in again with MFA, then retry.")
 		return
 	}
@@ -193,26 +205,34 @@ func (h *Handler) deleteMe(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// recentMFA: the token has amr mfa, the user's newest gated sign-in is at most
-// MFAMaxAge old, and that sign-in belongs to this token. The token alone is not
-// enough: its amr may come from a sign-in up to 12 h ago (mfagate.DefaultMaxAge).
-// The evidence alone is not enough either: it may come from another session, so
-// an older or stolen token could ride on a fresh MFA sign-in elsewhere.
+// Refusal reasons of recentMFA, in the log only. The client always gets
+// CodeRecentMFARequired.
+const (
+	reasonNoMFA          = "token_without_mfa"
+	reasonNoEvidence     = "no_recent_mfa_evidence"
+	reasonNotBound       = "sign_in_not_bound"
+	reasonIDTokenInvalid = "id_token_invalid"
+	reasonIDTokenStale   = "id_token_stale"
+	reasonIDTokenNoMFA   = "id_token_without_mfa"
+)
+
+// recentMFA returns "" when the caller signed in with MFA at most MFAMaxAge ago,
+// else the refusal reason. The access token must have amr mfa in every case.
 //
-// Session binding: a token with a "sid" claim needs evidence of that session. A
-// token without "sid" needs its "auth_time" within MFAMaxAge and from the same
-// sign-in as the evidence: not after it, at most signInGap before it. "iat" is
-// never used: it renews on every refresh. Neither claim: refused.
-func (h *Handler) recentMFA(ctx context.Context, p *auth.Principal) (bool, error) {
+// With idToken (header X-Synthwerk-Id-Token): the ID token passes IDTokens for
+// the caller's subject, its auth_time is at most MFAMaxAge old, and the sign-in
+// had MFA: the ID token has amr mfa, or the user's newest gated sign-in is of
+// its session (sid) and at most MFAMaxAge old. Zitadel access tokens carry no
+// sid and no auth_time, so this is the path that works with Zitadel.
+//
+// Without idToken: the access token alone is not enough, its amr may come from a
+// sign-in up to 12 h ago (mfagate.DefaultMaxAge). The newest gated sign-in must be
+// at most MFAMaxAge old and belong to this token: a "sid" claim must match it, else
+// "auth_time" must be within MFAMaxAge and from the same sign-in (not after it, at
+// most signInGap before it). "iat" is never used: it renews on every refresh.
+func (h *Handler) recentMFA(ctx context.Context, p *auth.Principal, idToken string) (string, error) {
 	if !p.HasMFA() {
-		return false, nil
-	}
-	e, err := h.Evidence.Latest(ctx, p.Subject)
-	if errors.Is(err, mfagate.ErrNoEvidence) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
+		return reasonNoMFA, nil
 	}
 	maxAge := h.MFAMaxAge
 	if maxAge <= 0 {
@@ -223,18 +243,70 @@ func (h *Handler) recentMFA(ctx context.Context, p *auth.Principal) (bool, error
 		age := now.Sub(t)
 		return age <= maxAge && age >= -time.Minute
 	}
-	if !fresh(e.CheckedAt) || !slices.Contains(e.AMR, mfagate.AMRMFA) {
-		return false, nil
+	evidence := func() (mfagate.Evidence, bool, error) {
+		e, err := h.Evidence.Latest(ctx, p.Subject)
+		if errors.Is(err, mfagate.ErrNoEvidence) {
+			return e, false, nil
+		}
+		if err != nil {
+			return e, false, err
+		}
+		return e, fresh(e.CheckedAt) && slices.Contains(e.AMR, mfagate.AMRMFA), nil
+	}
+
+	if idToken != "" {
+		if h.IDTokens == nil {
+			return reasonIDTokenInvalid, nil
+		}
+		tok, err := h.IDTokens.Verify(ctx, idToken, p.Subject)
+		switch {
+		case errors.Is(err, auth.ErrUnavailable):
+			return "", err
+		case err != nil:
+			h.Log.InfoContext(ctx, "account delete: ID token refused", slog.String("event.name", "account.id_token_refused"),
+				slog.String("enduser.id", p.Subject), slog.String("error.type", err.Error()))
+			return reasonIDTokenInvalid, nil
+		}
+		if !fresh(tok.AuthTime) {
+			return reasonIDTokenStale, nil
+		}
+		if tok.HasMFA() {
+			return "", nil
+		}
+		if tok.SessionID == "" {
+			return reasonIDTokenNoMFA, nil
+		}
+		e, ok, err := evidence()
+		if err != nil {
+			return "", err
+		}
+		if !ok || e.SessionID != tok.SessionID {
+			return reasonIDTokenNoMFA, nil
+		}
+		return "", nil
+	}
+
+	e, ok, err := evidence()
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return reasonNoEvidence, nil
 	}
 	if sid, _ := p.Raw["sid"].(string); sid != "" {
-		return e.SessionID == sid, nil
+		if e.SessionID != sid {
+			return reasonNotBound, nil
+		}
+		return "", nil
 	}
 	at, ok := unixClaim(p.Raw["auth_time"])
 	if !ok {
-		return false, nil
+		return reasonNotBound, nil
 	}
-	gap := e.CheckedAt.Sub(at)
-	return fresh(at) && gap >= -time.Minute && gap <= signInGap, nil
+	if gap := e.CheckedAt.Sub(at); !fresh(at) || gap < -time.Minute || gap > signInGap {
+		return reasonNotBound, nil
+	}
+	return "", nil
 }
 
 // signInGap is the longest time from the user's authentication (auth_time) to the
