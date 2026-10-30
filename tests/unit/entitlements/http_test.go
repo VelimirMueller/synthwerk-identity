@@ -29,7 +29,12 @@ const (
 	zother    = "300000000000000004"
 )
 
-type fakeOrgs struct{ err error }
+// fakeOrgs: err fails every read; inactive makes the caller no active member (a
+// deactivated or invited membership).
+type fakeOrgs struct {
+	err      error
+	inactive bool
+}
 
 var all = []orgs.Org{
 	{ID: orgID, ZitadelOrgID: zorg, Status: "active"},
@@ -55,6 +60,16 @@ func (f fakeOrgs) OrgByID(_ context.Context, id string) (orgs.Org, error) {
 
 func (f fakeOrgs) OrgByZitadelID(_ context.Context, zid string) (orgs.Org, error) {
 	return f.find(func(o orgs.Org) bool { return o.ZitadelOrgID == zid })
+}
+
+func (f fakeOrgs) MemberRole(context.Context, string, string) (orgs.Role, error) {
+	if f.err != nil {
+		return "", f.err
+	}
+	if f.inactive {
+		return "", orgs.ErrNotFound
+	}
+	return orgs.Member, nil
 }
 
 type fakeRepo struct{}
@@ -142,6 +157,16 @@ func TestHandler(t *testing.T) {
 			}
 			strict(t, body, &p)
 			if st != http.StatusNotFound || p.Code != "not_found" || p.Status != 404 {
+				t.Fatalf("%d %s", st, body)
+			}
+		})
+	}
+
+	// synthwerk#37: the token role outlives a deactivation until the token expires.
+	for _, r := range ok {
+		t.Run(r.name+" - deactivated member, token still has the role - 404 not_found", func(t *testing.T) {
+			st, body := serve(t, fakeOrgs{inactive: true}, user(zorg, "owner"), r.path)
+			if st != http.StatusNotFound || !bytes.Contains(body, []byte(`"code":"not_found"`)) {
 				t.Fatalf("%d %s", st, body)
 			}
 		})

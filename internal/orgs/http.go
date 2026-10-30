@@ -92,6 +92,23 @@ func (h *Handler) gate(w http.ResponseWriter, r *http.Request) (access, bool) {
 	if a.own && !h.acceptInvite(w, r, org.ID, p.Subject) {
 		return access{}, false
 	}
+	if a.own {
+		// The token role can outlive the membership: a deactivated or invited member
+		// keeps it until the token expires. Only an active stored membership counts
+		// (synthwerk#37); anything else is no membership.
+		_, err := h.Repo.MemberRole(r.Context(), org.ID, p.Subject)
+		if err != nil && !errors.Is(err, ErrNotFound) {
+			h.fail(w, r, err)
+			return access{}, false
+		}
+		if err != nil {
+			a.own = false
+			if !p.IsOperator() {
+				writeProblem(w, r, http.StatusNotFound, codeNotFound, "")
+				return access{}, false
+			}
+		}
+	}
 	return a, true
 }
 

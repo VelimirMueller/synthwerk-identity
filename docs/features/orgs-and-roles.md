@@ -33,7 +33,7 @@ updated: 2026-10-30
 - A repeat invite of an email with a pending invitation (any case) answers 202 with that invitation, unchanged. No Zitadel call, no event: the answer never shows whether the first invite made a user.
 - `DELETE /v1/orgs/{orgId}/invitations/{invitationId}` revokes a pending invitation (owner or admin; only owner for an `owner` invitation): `revoked_at` is set, the `invited` row is deleted, the Zitadel user identity made for it is deleted, `member.invite_revoked` is written. A revoked invitation is never accepted. When the invitee is an active or deactivated member by now, only the invitation is revoked: the member row and the Zitadel user stay, and only an owner revokes when that member is an owner.
 - `POST /v1/orgs/{orgId}/members/{userId}:deactivate` and `:reactivate` set `status` on the row, write `member.deactivated` or `member.reactivated` and switch the Zitadel user grant off or on, in one transaction.
-- A deactivated member fails every stored-role check (members list, role change, apps, widget token, audit list).
+- A deactivated member fails every stored-role check (members list, role change, apps, widget token, audit list). Every route behind the org gate (`GET /v1/orgs/{orgId}`, apps, audit list) and both entitlements routes also need an active stored membership: a deactivated member with a token that still has the role gets 404, the same as an unknown org.
 - The outbox relay publishes to stream `EVT_IDENTITY` (`evt.identity.>`), which identity creates at start.
 
 ## How to use
@@ -88,6 +88,7 @@ updated: 2026-10-30
 
 ## Tests
 
+- `tests/unit/apps/http_test.go` — `CreateWidgetToken - deactivated member, token still has the role - 404 even on a listed origin`, `ListApps - deactivated member, token still has the role - 404`; `tests/unit/entitlements/http_test.go` — `<route> - deactivated member, token still has the role - 404 not_found`; `tests/integration/apps/apps_test.go` — `Deactivated member, token still has the role - widget token, ListApps, GetApp and GetOrg 404`
 - `tests/unit/orgs/roles_test.go` — `Authorize - member changes role - denied`, `Authorize - admin grants owner - denied`, `Authorize - owner grants owner - allowed`, `Authorize - owner demotes self as last owner - conflict`, `Claims - roles claim with several roles - highest role wins`, `Operator - is_operator - never an org role`
 - `tests/integration/orgs/orgs_test.go` — `ChangeRole - success - membership and outbox row in one commit, Zitadel grant written`, `ChangeRole - Zitadel fake fails - mirror rolled back, no event`, `ChangeRole - last owner demoted - rejected, row unchanged`, `ChangeRole - two parallel demotions of two owners - one succeeds`, `Action org created - same event twice - one org, one owner`
 - `tests/integration/orgs/orgs_test.go` — `PATCH member - member token - 403 generic body`, `PATCH member - owner token - 200`, `PATCH member - token of other org - 404`, `PATCH member - forged token - 401`, `ListMembers - admin demoted, old admin token - 403`
@@ -108,3 +109,4 @@ updated: 2026-10-30
 | 2026-10-30 | Invite, deactivate and reactivate members; member `status`; owner guard counts active owners (synthwerk#37). |
 | 2026-10-30 | Pending invitations, no account enumeration, invite rate limit, fail-closed repair after a failed commit (synthwerk#37 security review). |
 | 2026-10-30 | Repeat invite returns the pending invitation; revoke a pending invitation; `member_exists` only for listed members (synthwerk#37 security review). |
+| 2026-10-30 | The org gate and the entitlements routes need an active stored membership: a deactivated member with an old token gets 404 (synthwerk#37 security review). |

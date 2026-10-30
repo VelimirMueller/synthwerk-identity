@@ -350,6 +350,30 @@ func TestHTTP(t *testing.T) {
 			t.Fatalf("get %d", st)
 		}
 	})
+	t.Run("Deactivated member, token still has the role - widget token, ListApps, GetApp and GetOrg 404", func(t *testing.T) {
+		old := tok(member, zorg, "member")
+		setStatus := func(status string) {
+			t.Helper()
+			// WithoutCancel: the cleanup runs after the subtest context ends.
+			if _, err := s.db.Exec(context.WithoutCancel(t.Context()), `UPDATE identity.memberships SET status = $3 WHERE org_id = $1 AND user_sub = $2`, org.ID, member, status); err != nil {
+				t.Fatal(err)
+			}
+		}
+		setStatus("deactivated")
+		t.Cleanup(func() { setStatus("active") })
+		if st, body := call(t, http.MethodPost, tokens, old, "http://localhost:3000", ""); st != http.StatusNotFound {
+			t.Fatalf("widget token %d %s", st, body)
+		}
+		for _, u := range []string{list, list + "/" + created.ID, srv.URL + "/v1/orgs/" + org.ID} {
+			if st, body := call(t, http.MethodGet, u, old, "", ""); st != http.StatusNotFound || !strings.Contains(body, "not_found") {
+				t.Fatalf("%s: %d %s", u, st, body)
+			}
+		}
+		setStatus("active")
+		if st, body := call(t, http.MethodGet, list, old, "", ""); st != http.StatusOK {
+			t.Fatalf("reactivated list %d %s", st, body)
+		}
+	})
 	t.Run("DeleteApp - owner - 204, then widget token 404", func(t *testing.T) {
 		if st, _ := call(t, http.MethodDelete, list+"/"+created.ID, tok(owner, zorg, "owner"), "", ""); st != http.StatusNoContent {
 			t.Fatalf("delete %d", st)
