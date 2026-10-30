@@ -88,9 +88,13 @@ func ParseStudioPage(raw []byte) (Entry, error) {
 	if ev.Subject != *d.PageID {
 		return Entry{}, malformed("subject and data.page_id are not the same")
 	}
+	data, err := d.canonical(created)
+	if err != nil {
+		return Entry{}, malformed("data does not encode")
+	}
 	return Entry{
 		ID: ev.ID, Type: ev.Type, OrgID: *d.OrgID, Actor: ev.Actor, Subject: ev.Subject,
-		Time: ev.Time.UTC(), Data: ev.Data, UserSub: ev.Actor[len("user:"):],
+		Time: ev.Time.UTC(), Data: data, UserSub: ev.Actor[len("user:"):],
 	}, nil
 }
 
@@ -126,6 +130,22 @@ func (d studioPageData) check(created bool) error {
 		}
 	}
 	return nil
+}
+
+// canonical encodes the checked fields only, with the schema key names. The audit
+// row stores this copy, never the received bytes: Go's decoder matches keys without
+// case and keeps the last of two equal keys (security review, synthwerk#106).
+func (d studioPageData) canonical(created bool) (json.RawMessage, error) {
+	out := map[string]any{"org_id": *d.OrgID, "page_id": *d.PageID, "slug": *d.Slug, "locale": *d.Locale}
+	if !created {
+		out["version"] = *d.Version
+		var prev *int64
+		if err := json.Unmarshal(d.PreviousVersion, &prev); err != nil {
+			return nil, err
+		}
+		out["previous_version"] = prev
+	}
+	return json.Marshal(out)
 }
 
 func lowerUUID(s string) bool {

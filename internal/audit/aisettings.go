@@ -102,9 +102,13 @@ func ParseAISettings(raw []byte) (AISettingsChange, error) {
 	if ev.OrgID != *d.OrgID || ev.Subject != *d.OrgID {
 		return AISettingsChange{}, malformed("orgid, subject and data.org_id are not the same")
 	}
+	data, err := d.canonical()
+	if err != nil {
+		return AISettingsChange{}, malformed("data does not encode")
+	}
 	return AISettingsChange{
 		ID: ev.ID, Type: AISettingsEventType, OrgID: *d.OrgID, Actor: ev.Actor, Subject: ev.Subject,
-		Time: ev.Time.UTC(), Data: ev.Data, UserSub: ev.Actor[len("user:"):],
+		Time: ev.Time.UTC(), Data: data, UserSub: ev.Actor[len("user:"):],
 	}, nil
 }
 
@@ -159,6 +163,31 @@ func (d aiSettingsData) check() error {
 		}
 	}
 	return nil
+}
+
+// canonical encodes the checked fields only, with the schema key names. The audit
+// row stores this copy, never the received bytes: Go's decoder matches keys without
+// case and keeps the last of two equal keys, so the raw data could hold a value
+// the checks never saw (security review, synthwerk#106).
+func (d aiSettingsData) canonical() (json.RawMessage, error) {
+	out := map[string]any{
+		"org_id":              *d.OrgID,
+		"version":             *d.Version,
+		"changed":             *d.Changed,
+		"model":               *d.Model,
+		"allowed_models":      *d.AllowedModels,
+		"max_input_chars":     *d.MaxInputChars,
+		"user_tokens_per_day": *d.UserTokensPerDay,
+		"system_prompt_chars": *d.SystemPromptChars,
+	}
+	if d.Temperature != nil {
+		var t float64
+		if err := json.Unmarshal(d.Temperature, &t); err != nil {
+			return nil, err
+		}
+		out["temperature"] = t
+	}
+	return json.Marshal(out)
 }
 
 func alias(s string) bool { return len(s) <= maxAliasLen && aliasRe.MatchString(s) }

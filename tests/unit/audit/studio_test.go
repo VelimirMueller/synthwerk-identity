@@ -229,3 +229,58 @@ func TestStudioPagesReadyDegradesReadyz(t *testing.T) {
 		t.Fatalf("status %s checks %+v", body.Status, body.Checks)
 	}
 }
+
+// studioRaw returns the example of verb with data replaced by the JSON text data.
+func studioRaw(t *testing.T, verb, data string) []byte {
+	t.Helper()
+	var ev map[string]json.RawMessage
+	if err := json.Unmarshal(studioExample(t, verb), &ev); err != nil {
+		t.Fatal(err)
+	}
+	ev["data"] = json.RawMessage(data)
+	b, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// ParseStudioPage - case-variant and duplicate keys - Data holds only the checked
+// fields with the schema names, never the hidden value (security review, #106).
+func TestParseStudioPageStoresTheCheckedFieldsOnly(t *testing.T) {
+	ids := `"org_id":"` + exampleOrg + `","page_id":"` + examplePage + `"`
+	for name, data := range map[string]string{
+		"case-variant key": `{` + ids + `,"SLUG":"Secret launch","slug":"pricing","locale":"de","version":2,"previous_version":1}`,
+		"duplicate key":    `{` + ids + `,"slug":"Secret launch","slug":"pricing","locale":"de","version":2,"previous_version":1}`,
+		"case-variant id":  `{` + ids + `,"Page_ID":"` + examplePage + `","slug":"pricing","locale":"de","version":2,"previous_version":null}`,
+	} {
+		e, err := audit.ParseStudioPage(studioRaw(t, "published", data))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		var d map[string]any
+		if err := json.Unmarshal(e.Data, &d); err != nil {
+			t.Fatal(err)
+		}
+		keys := slices.Sorted(func(yield func(string) bool) {
+			for k := range d {
+				if !yield(k) {
+					return
+				}
+			}
+		})
+		if !slices.Equal(keys, []string{"locale", "org_id", "page_id", "previous_version", "slug", "version"}) ||
+			d["slug"] != "pricing" || strings.Contains(string(e.Data), "Secret launch") {
+			t.Fatalf("%s: data %s", name, e.Data)
+		}
+	}
+	// page.created keeps no version keys.
+	e, err := audit.ParseStudioPage(studioRaw(t, "created", `{`+ids+`,"Slug":"Secret launch","slug":"pricing","locale":"en"}`))
+	if err != nil || string(e.Data) != `{"locale":"en","org_id":"`+exampleOrg+`","page_id":"`+examplePage+`","slug":"pricing"}` {
+		t.Fatalf("created: %v %s", err, e.Data)
+	}
+	// A hidden value that wins the decode is still checked.
+	if _, err := audit.ParseStudioPage(studioRaw(t, "published", `{`+ids+`,"slug":"pricing","Slug":"Secret launch","locale":"de","version":2,"previous_version":1}`)); !errors.Is(err, audit.ErrMalformed) {
+		t.Fatalf("last key wins and is not a slug: %v", err)
+	}
+}

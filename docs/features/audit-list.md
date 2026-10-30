@@ -52,6 +52,7 @@ updated: 2026-10-30
 | llm consumer | Durable `identity-llm-ai-settings` on `EVT_LLM`, filter `evt.llm.ai_settings.changed.v1`, deliver all, explicit ack, ack wait 30 s, max 16 pending. Replicas share it |
 | studio consumer | Durable `identity-studio-pages` on `EVT_STUDIO`, filters `evt.studio.page.created.v1`, `evt.studio.page.published.v1`, `evt.studio.page.rolled_back.v1` (other studio subjects stay in the stream), same delivery settings |
 | studio event checks | Kit envelope rules; one of the three types; `data` strict per type (`page.created` has no version; publish and roll back need `version` ≥ 1 and `previous_version` null or ≥ 1); slug and locale as the schema; `orgid` = `data.org_id`, `subject` = `data.page_id`; `actor` = `user:<sub>` |
+| Stored `data` | A new JSON object of the checked fields with the schema key names, never the received bytes: Go's decoder matches keys without case and keeps the last duplicate, so the raw data could hold a value no check saw (llm and studio) |
 | llm event checks | Kit envelope rules; exact type; `data` strict (no unknown field, every schema rule); `orgid` = `subject` = `data.org_id`; `actor` = `user:[A-Za-z0-9_-]{1,128}` |
 | Malformed llm event | Terminated, no row, WARN that names the rule, never a value |
 | llm event of an unknown org | Acked, no row, INFO. A deleted org is unknown |
@@ -88,3 +89,4 @@ updated: 2026-10-30
 | 2026-10-30 | First version (synthwerk#37). |
 | 2026-10-30 | The list also shows `llm.ai_settings.changed.v1`, read from `EVT_LLM` by a durable consumer; `/readyz` check `llm_ai_settings` (synthwerk#39). |
 | 2026-10-30 | The list also shows the studio page events `page.created`, `page.published`, `page.rolled_back`, read from `EVT_STUDIO` by the durable consumer `identity-studio-pages`; `/readyz` check `studio_pages`; one consumer code for every source (synthwerk#106). |
+| 2026-10-30 | Both consumers store a re-encoded copy of the checked `data`, not the received bytes (security review, synthwerk#106). |
