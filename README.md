@@ -85,6 +85,8 @@ go run ./cmd/identity  # serves :8080
 | `SYNTHWERK_IDENTITY_HTTP_ADDR` | `:8080` | Listen address |
 | `SYNTHWERK_IDENTITY_EXPORT_SOURCES` | unset | Services asked for the own-data export, `name=url` list, for example `llm=http://llm:8080` |
 | `SYNTHWERK_IDENTITY_ACCOUNT_DELETE_MFA_MAX_AGE` | `15m` | Max age of the sign-in with MFA for `DELETE /v1/me` |
+| `SYNTHWERK_IDENTITY_ID_TOKEN_CLIENT_IDS` | empty | OIDC client ids whose ID tokens prove a recent sign-in for `DELETE /v1/me` (comma list) |
+| `SYNTHWERK_IDENTITY_ID_TOKEN_CLIENT_FILE` | empty | File with one more client id: plain text, or JSON with `client_id` (studio-client.json). Read per call |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | OTLP gRPC collector. Unset = no export |
 | `SYNTHWERK_IDENTITY_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARN`, `ERROR` |
 | `SYNTHWERK_IDENTITY_LOG_FORMAT` | `json` | `console` only in env `local` |

@@ -205,7 +205,8 @@ func run(ctx context.Context) error {
 		}
 		appCfg.Apps = &apps.Handler{Repo: &apps.Store{DB: db, Source: source}, Orgs: appCfg.Orgs, Widget: wi, Log: logger}
 		appCfg.Entitlements = &entitlements.Handler{Orgs: store, Repo: plans, Log: logger}
-		if appCfg.Account, err = accountHandler(db, source, logger); err != nil {
+		idBase := auth.Config{Issuer: issuer, JWKSURL: env.Get(app.Service, "JWKS_URL", "")}
+		if appCfg.Account, err = accountHandler(ctx, db, source, idBase, logger); err != nil {
 			return err
 		}
 	} else {
@@ -386,7 +387,7 @@ func mfaRoutes(mux *http.ServeMux, db *pgxpool.Pool, zc *zitadel.Client, logger 
 }
 
 // accountHandler serves the export and the delete of the own account (synthwerk#41).
-func accountHandler(db *pgxpool.Pool, source string, logger *slog.Logger) (*account.Handler, error) {
+func accountHandler(ctx context.Context, db *pgxpool.Pool, source string, idBase auth.Config, logger *slog.Logger) (*account.Handler, error) {
 	sources, err := account.ParseSources(env.Get(app.Service, "EXPORT_SOURCES", ""))
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", env.Key(app.Service, "EXPORT_SOURCES"), err)
@@ -399,9 +400,21 @@ func accountHandler(db *pgxpool.Pool, source string, logger *slog.Logger) (*acco
 		}
 		maxAge = d
 	}
+	// The delete reads the recent sign-in from the studio's ID token (header
+	// X-Synthwerk-Id-Token): Zitadel access tokens carry no sid and no auth_time.
+	var idTokens account.IDTokens
+	ids := splitList(env.Get(app.Service, "ID_TOKEN_CLIENT_IDS", ""))
+	idFile := env.Get(app.Service, "ID_TOKEN_CLIENT_FILE", "")
+	if len(ids) > 0 || idFile != "" {
+		idTokens = &account.ClientIDTokens{Base: idBase, ClientIDs: ids, ClientFile: idFile, Log: logger}
+	} else {
+		logger.WarnContext(ctx, "no ID token client: account delete works only with sid or auth_time in the access token",
+			slog.String("event.name", "account.id_token_off"))
+	}
 	return &account.Handler{
 		Repo:      &account.Store{DB: db, Source: source},
 		Evidence:  mfagate.Postgres{DB: db},
+		IDTokens:  idTokens,
 		Fetcher:   &account.Fetcher{Sources: sources},
 		Log:       logger,
 		Now:       time.Now,
