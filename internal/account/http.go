@@ -200,7 +200,9 @@ func (h *Handler) deleteMe(w http.ResponseWriter, r *http.Request) {
 // an older or stolen token could ride on a fresh MFA sign-in elsewhere.
 //
 // Session binding: a token with a "sid" claim needs evidence of that session. A
-// token without "sid" needs its own "auth_time" (else "iat") within MFAMaxAge.
+// token without "sid" needs its "auth_time" within MFAMaxAge and from the same
+// sign-in as the evidence: not after it, at most signInGap before it. "iat" is
+// never used: it renews on every refresh. Neither claim: refused.
 func (h *Handler) recentMFA(ctx context.Context, p *auth.Principal) (bool, error) {
 	if !p.HasMFA() {
 		return false, nil
@@ -227,13 +229,17 @@ func (h *Handler) recentMFA(ctx context.Context, p *auth.Principal) (bool, error
 	if sid, _ := p.Raw["sid"].(string); sid != "" {
 		return e.SessionID == sid, nil
 	}
-	for _, claim := range []string{"auth_time", "iat"} {
-		if t, ok := unixClaim(p.Raw[claim]); ok {
-			return fresh(t), nil
-		}
+	at, ok := unixClaim(p.Raw["auth_time"])
+	if !ok {
+		return false, nil
 	}
-	return false, nil
+	gap := e.CheckedAt.Sub(at)
+	return fresh(at) && gap >= -time.Minute && gap <= signInGap, nil
 }
+
+// signInGap is the longest time from the user's authentication (auth_time) to the
+// MFA gate check (evidence CheckedAt) of the same sign-in.
+const signInGap = 5 * time.Minute
 
 // unixClaim reads a NumericDate claim (seconds since the epoch).
 func unixClaim(v any) (time.Time, bool) {

@@ -157,8 +157,10 @@ func TestDeleteMe(t *testing.T) {
 		{"evidence without mfa", user("mfa"), fakeEvidence{e: &mfagate.Evidence{AMR: []string{"pwd"}, CheckedAt: now}}},
 		{"token of another session, fresh MFA sign-in elsewhere", withRaw(user("mfa"), map[string]any{"sid": "s-old"}), fresh(time.Minute)},
 		{"token without sid, auth_time 2 h old", withRaw(user("mfa"), map[string]any{"auth_time": float64(now.Add(-2 * time.Hour).Unix())}), fresh(time.Minute)},
-		{"token without sid, no auth_time, iat 2 h old", withRaw(user("mfa"), map[string]any{"iat": float64(now.Add(-2 * time.Hour).Unix())}), fresh(time.Minute)},
-		{"token without sid, auth_time or iat", withRaw(user("mfa"), nil), fresh(time.Minute)},
+		{"token with only a fresh iat (renews on refresh)", withRaw(user("mfa"), map[string]any{"iat": float64(now.Unix())}), fresh(time.Minute)},
+		{"token without sid and auth_time", withRaw(user("mfa"), nil), fresh(time.Minute)},
+		{"token without sid, auth_time 10 min before the evidence (another sign-in)", withRaw(user("mfa"), map[string]any{"auth_time": float64(now.Add(-11 * time.Minute).Unix())}), fresh(time.Minute)},
+		{"token without sid, auth_time after the evidence", withRaw(user("mfa"), map[string]any{"auth_time": float64(now.Unix())}), fresh(5 * time.Minute)},
 	} {
 		t.Run("DeleteMe - "+tc.name+" - 403 recent_mfa_required, nothing deleted", func(t *testing.T) {
 			repo := &fakeRepo{}
@@ -174,8 +176,8 @@ func TestDeleteMe(t *testing.T) {
 		raw  map[string]any
 	}{
 		{"same session", map[string]any{"sid": "s-1"}},
-		{"no sid, auth_time 5 min old", map[string]any{"auth_time": float64(now.Add(-5 * time.Minute).Unix())}},
-		{"no sid, no auth_time, iat 5 min old", map[string]any{"iat": float64(now.Add(-5 * time.Minute).Unix())}},
+		{"no sid, auth_time at the evidence time", map[string]any{"auth_time": float64(now.Add(-5 * time.Minute).Unix())}},
+		{"no sid, auth_time 1 min before the evidence", map[string]any{"auth_time": float64(now.Add(-6 * time.Minute).Unix())}},
 	} {
 		t.Run("DeleteMe - "+tc.name+", MFA sign-in within max age - 202", func(t *testing.T) {
 			repo := &fakeRepo{}
