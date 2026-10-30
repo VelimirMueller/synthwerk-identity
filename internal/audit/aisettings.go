@@ -207,19 +207,29 @@ type Recorder interface {
 	Record(ctx context.Context, c AISettingsChange) (inserted bool, err error)
 }
 
-// Execer is the part of *pgxpool.Pool the writer needs.
-type Execer interface {
-	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+// Beginner is the part of *pgxpool.Pool the writer needs.
+type Beginner interface {
+	Begin(ctx context.Context) (pgx.Tx, error)
 }
 
 // Writer inserts audit rows from other services (search_path=identity).
-type Writer struct{ DB Execer }
+type Writer struct{ DB Beginner }
 
-// Record inserts c in one statement. A user who deleted the account (#41) is
-// already "deleted-user": a late event never brings the sub back.
+// Record inserts c in one transaction. It first takes the account lock of the
+// user (account.LockUser), so an account delete (#41) that runs at the same time
+// either rewrites this row or is committed before the check: a user who deleted
+// the account is "deleted-user", and a late event never brings the sub back.
 func (w *Writer) Record(ctx context.Context, c AISettingsChange) (bool, error) {
+	tx, err := w.DB.Begin(ctx)
+	if err != nil {
+		return false, fmt.Errorf("audit: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // no-op after Commit
+	if err := account.LockUser(ctx, tx, c.UserSub); err != nil {
+		return false, err
+	}
 	var known, inserted bool
-	err := w.DB.QueryRow(ctx, `WITH org AS (SELECT id FROM orgs WHERE id = $2::uuid),
+	err = tx.QueryRow(ctx, `WITH org AS (SELECT id FROM orgs WHERE id = $2::uuid),
 		ins AS (
 			INSERT INTO audit_events (id, org_id, type, actor, subject, time, data)
 			SELECT $1::uuid, org.id, $3,
@@ -241,6 +251,9 @@ func (w *Writer) Record(ctx context.Context, c AISettingsChange) (bool, error) {
 	}
 	if !known {
 		return false, ErrUnknownOrg
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, fmt.Errorf("audit: commit: %w", err)
 	}
 	return inserted, nil
 }

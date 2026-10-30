@@ -16,6 +16,7 @@ package account
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"slices"
@@ -85,6 +86,24 @@ func Hash(sub string) []byte {
 	return h[:]
 }
 
+// Execer runs one statement; pgx.Tx satisfies it.
+type Execer interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+// LockUser takes the transaction advisory lock of sub (key: the first 8 bytes of
+// Hash). Delete takes it first, and every writer of an audit row that names sub
+// from outside identity (the llm consumer, synthwerk#39) takes it before it reads
+// account_deletions. So such a row is either rewritten by the delete or written
+// after it as deleted-user, never left with the clear sub. The lock ends with tx.
+func LockUser(ctx context.Context, tx Execer, sub string) error {
+	key := int64(binary.BigEndian.Uint64(Hash(sub)[:8])) //nolint:gosec // G115: a hash as a lock key, wrap is fine
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, key); err != nil {
+		return fmt.Errorf("account: lock user: %w", err)
+	}
+	return nil
+}
+
 // Memberships returns every membership of sub, by org name.
 func (s *Store) Memberships(ctx context.Context, sub string) ([]Membership, error) {
 	rows, err := s.DB.Query(ctx, `SELECT o.id::text, o.name, o.slug, m.role, m.created_at, m.updated_at
@@ -134,6 +153,10 @@ func (s *Store) Delete(ctx context.Context, sub string, emails ...string) (Delet
 	}
 	defer func() { _ = tx.Rollback(ctx) }() // no-op after Commit
 
+	// First lock: an audit writer of another service waits for this commit.
+	if err := LockUser(ctx, tx, sub); err != nil {
+		return Deletion{}, err
+	}
 	// One delete per user at a time: the second waits here, then finds the row.
 	var requested time.Time
 	err = tx.QueryRow(ctx, `INSERT INTO account_deletions (user_sub_hash, user_sub) VALUES ($1, $2)

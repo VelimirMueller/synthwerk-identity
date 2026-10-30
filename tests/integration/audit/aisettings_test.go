@@ -307,3 +307,55 @@ func TestAISettingsConsumerEndToEnd(t *testing.T) {
 		t.Fatal("the user sub is in the logs")
 	}
 }
+
+// Record and account Delete - run at the same time, 20 users - no row keeps the
+// clear actor: the shared user lock orders them (security review, synthwerk#39).
+func TestRecordRacesAccountDelete(t *testing.T) {
+	db := env.Database(t)
+	if err := app.Migrate(t.Context(), db); err != nil {
+		t.Fatal(err)
+	}
+	plans := &entitlements.Store{DB: db, Source: source, Default: entitlements.Plan{Name: entitlements.Free, Limits: entitlements.FreeDefaults}}
+	st := &orgs.Store{DB: db, Source: source, Plans: plans}
+	grant := func(n int, sub, role string) {
+		t.Helper()
+		if _, err := st.ApplyGrant(t.Context(), orgs.GrantChange{
+			Key: fmt.Sprintf("i:usergrant:g-%s:%d", sub, n), ZitadelOrgID: zorg, GrantID: "g-" + sub, UserSub: sub, Roles: []string{role},
+		}, "Acme Labs"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	grant(0, owner, "owner")
+	org, err := st.OrgByZitadelID(t.Context(), zorg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := &audit.Writer{DB: db}
+	acc := &account.Store{DB: db, Source: source}
+	for i := range 20 {
+		sub := fmt.Sprintf("2000000000000000%02d", i)
+		grant(i+1, sub, "admin")
+		_, raw := aiEvent(t, org.ID, 1, 2000)
+		ch, err := audit.ParseAISettings(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ch.Actor, ch.UserSub = "user:"+sub, sub
+		var wg sync.WaitGroup
+		var recErr, delErr error
+		start := make(chan struct{})
+		wg.Go(func() { <-start; _, recErr = w.Record(context.WithoutCancel(t.Context()), ch) })
+		wg.Go(func() { <-start; _, delErr = acc.Delete(context.WithoutCancel(t.Context()), sub) })
+		close(start)
+		wg.Wait()
+		if recErr != nil || delErr != nil {
+			t.Fatalf("run %d: record %v, delete %v", i, recErr, delErr)
+		}
+		if n := count(t, db, `SELECT count(*) FROM audit_events WHERE actor = $1`, "user:"+sub); n != 0 {
+			t.Fatalf("run %d: %d rows keep the clear actor", i, n)
+		}
+		if n := count(t, db, `SELECT count(*) FROM audit_events WHERE id = $1 AND actor = $2`, ch.ID, "user:"+account.DeletedUser); n != 1 {
+			t.Fatalf("run %d: the change is not stored as deleted-user", i)
+		}
+	}
+}

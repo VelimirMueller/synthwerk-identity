@@ -56,7 +56,7 @@ updated: 2026-10-30
 | llm consumer logs | Event id only. No user sub, no setting value |
 | Refusals | Not listed: a refused change writes no event |
 | Org delete | The audit rows go with the org (`ON DELETE CASCADE`) |
-| Account delete (#41) | Rows of other orgs stay; the user becomes `deleted-user` in `actor`, `subject`, `data.user_sub` and `data.owner_sub`. This includes llm rows. An llm event of a deleted user that arrives later is stored with actor `user:deleted-user` |
+| Account delete (#41) | Rows of other orgs stay; the user becomes `deleted-user` in `actor`, `subject`, `data.user_sub` and `data.owner_sub`. This includes llm rows. An llm event of a deleted user that arrives later is stored with actor `user:deleted-user`. The llm consumer and the delete take the same user lock (`account.LockUser`): a row written during a delete never keeps the clear sub |
 | Retention | No end yet (follow-up) |
 
 ## Errors
@@ -72,7 +72,7 @@ updated: 2026-10-30
 
 - `tests/unit/audit/audit_test.go` — `ListAuditEvents - owner, two pages - newest first, cursor walks back`, `ListAuditEvents - operator - Forbidden`, `ListAuditEvents - admin token, stored role member - Forbidden`, `ListAuditEvents - cursor=MA - 400`
 - `tests/unit/audit/aisettings_test.go` — `ParseAISettings - contract example - org, actor, sub, time and the data as received`, `ParseAISettings - each broken event - ErrMalformed, and the error holds no value of the event`, `Handle - valid event - record, then ack`, `Handle - malformed event - Term`, `Handle - unknown org - ack`, `Handle - database error - Nak with a delay that doubles per delivery`, `JetStreamConfig - defaults`, `Ready - not attached - /readyz is degraded`
-- `tests/integration/audit/aisettings_test.go` — `Consumer - EVT_LLM missing at start - waits with WARN and never creates it, attaches once llm creates it; a change is the newest audit event; a repeat, a malformed event and an unknown org add no row and leave nothing pending; after an account delete the change and a late change show deleted-user`
+- `tests/integration/audit/aisettings_test.go` — `Consumer - EVT_LLM missing at start - waits with WARN and never creates it, attaches once llm creates it; a change is the newest audit event; a repeat, a malformed event and an unknown org add no row and leave nothing pending; after an account delete the change and a late change show deleted-user`, `Record and account Delete - run at the same time, 20 users - no row keeps the clear actor`
 - `tests/integration/orgs/members_test.go` — `Migrate - outbox row with a bad time - skipped with a warning, start not blocked`, `Audit - admin changes a role - change is the newest audit event with actor and old and new role`, `Invite - new email and user of another org - same answer, same members list, same invitation, same audit event`
 
 ## Changes
