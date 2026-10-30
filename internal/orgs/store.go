@@ -282,6 +282,14 @@ func (s *Store) applyGrant(ctx context.Context, tx pgx.Tx, c GrantChange, orgNam
 	if sub == "" {
 		return OutcomeIgnored, nil
 	}
+	// A deleted account (synthwerk#41) never comes back through a late grant event.
+	var deleted bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM account_deletions WHERE user_sub_hash = sha256(convert_to($1, 'UTF8')))`, sub).Scan(&deleted); err != nil {
+		return "", fmt.Errorf("orgs: deleted account: %w", err)
+	}
+	if deleted {
+		return OutcomeIgnored, nil
+	}
 	org, err := scanOrg(tx.QueryRow(ctx, `SELECT `+orgCols+` FROM orgs WHERE zitadel_org_id = $1 FOR UPDATE`, c.ZitadelOrgID))
 	if errors.Is(err, ErrNotFound) {
 		if leave {

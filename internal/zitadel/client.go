@@ -128,6 +128,22 @@ func (c *Client) findGrant(ctx context.Context, zitadelOrgID, userSub string) (s
 	return found.Result[0].ID, nil
 }
 
+// DeleteUser implements account.Users (synthwerk#41): UserService v2 DeleteUser.
+// A user Zitadel does not know (404) counts as removed, so a retry after a lost
+// answer succeeds. The machine user needs the permission user.delete on the user's
+// org (synthwerk-infra zitadel-bootstrap).
+func (c *Client) DeleteUser(ctx context.Context, userSub string) error {
+	if userSub == "" {
+		return errors.New("zitadel: delete user: empty id")
+	}
+	err := c.do(ctx, http.MethodDelete, "/v2/users/"+url.PathEscape(userSub), "", nil, nil)
+	var e *APIError
+	if errors.As(err, &e) && e.Status == http.StatusNotFound {
+		return nil
+	}
+	return err
+}
+
 // PlatformOrg returns the org of the machine user, which is the platform org
 // (synthwerk). It is read once from Zitadel and kept.
 func (c *Client) PlatformOrg(ctx context.Context) (string, error) {

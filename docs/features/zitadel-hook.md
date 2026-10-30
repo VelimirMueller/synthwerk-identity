@@ -8,7 +8,7 @@ paths: ["internal/zitadelhook/**", "migrations/0002_zitadel_event_seen.sql", "cm
 api: []
 events: ["dev.synthwerk.identity.user.created.v1", "dev.synthwerk.identity.org.created.v1", "dev.synthwerk.identity.member.role_changed.v1"]
 mcp: []
-updated: 2026-10-29
+updated: 2026-10-30
 ---
 
 # Zitadel Action hook
@@ -41,6 +41,7 @@ updated: 2026-10-29
 | Signature age | 300 s, both directions |
 | Grants of another project | 204, ignored |
 | Grant that would remove the last owner | 204, mirror keeps the owner, WARN log |
+| Grant of a deleted account (synthwerk#41) | 204, ignored: no membership comes back |
 | Other event types | 204, ignored |
 | Exposure | Only the compose network `zitadel-hooks` (alias `identity-hooks`). The edge routes `/identity/*` to `:8080`. |
 
@@ -77,3 +78,4 @@ updated: 2026-10-29
 | 2026-10-23 | First version (synthwerk#28 task 5). |
 | 2026-10-28 | Mirror user grant events into memberships (synthwerk#29). |
 | 2026-10-29 | The listener also serves the MFA gate (synthwerk#94). |
+| 2026-10-30 | Grant events of a deleted account are ignored (synthwerk#41). |
