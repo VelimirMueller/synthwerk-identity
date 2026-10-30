@@ -36,7 +36,7 @@ updated: 2026-10-30
 1. Call `GET /v1/orgs/{orgId}/audit-events?limit=50` with the token of an owner or admin.
 2. Pass `next_cursor` as `cursor` for the next, older page.
 3. Show unknown event types with type, time and actor. New identity events appear without a change here.
-4. Set `SYNTHWERK_IDENTITY_NATS_URL` to get the llm AI settings changes and the studio page changes. Unset: the list shows identity events only. The NATS user needs consumer rights on `EVT_LLM` and `EVT_STUDIO`.
+4. Set `SYNTHWERK_IDENTITY_NATS_URL` to get the llm AI settings changes and the studio page changes. Unset: the list shows identity events only. The NATS user needs rights for its own durables only: create, info and pull of `identity-llm-ai-settings` on `EVT_LLM` and `identity-studio-pages` on `EVT_STUDIO`, plus their acks. Replies come on `_INBOX_identity.>`, not `_INBOX.>` (synthwerk-infra `compose/nats/nats.conf`, user `identity`).
 
 ## Rules and limits
 
@@ -90,3 +90,4 @@ updated: 2026-10-30
 | 2026-10-30 | The list also shows `llm.ai_settings.changed.v1`, read from `EVT_LLM` by a durable consumer; `/readyz` check `llm_ai_settings` (synthwerk#39). |
 | 2026-10-30 | The list also shows the studio page events `page.created`, `page.published`, `page.rolled_back`, read from `EVT_STUDIO` by the durable consumer `identity-studio-pages`; `/readyz` check `studio_pages`; one consumer code for every source (synthwerk#106). |
 | 2026-10-30 | Both consumers store a re-encoded copy of the checked `data`, not the received bytes (security review, synthwerk#106). |
+| 2026-10-30 | identity reads NATS replies on its own prefix `_INBOX_identity`, so the infra user `identity` gets least privilege: only its durables on `EVT_LLM` and `EVT_STUDIO` (synthwerk#106). |

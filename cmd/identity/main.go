@@ -26,6 +26,7 @@
 //	SYNTHWERK_IDENTITY_WIDGET_TOKEN_TTL  widget token lifetime, 1m to 15m, default 10m
 //	SYNTHWERK_IDENTITY_NATS_URL          NATS with credentials (secret). Unset = no relay; events stay in the outbox,
 //	                                     and no AI settings changes of llm reach the audit list (synthwerk#39).
+//	                                     Replies come on _INBOX_identity (app.NATSInboxPrefix), not _INBOX.
 //	SYNTHWERK_IDENTITY_ZITADEL_API_URL   Zitadel API inside the stack, for example http://zitadel:8080.
 //	SYNTHWERK_IDENTITY_ZITADEL_HOST      instance host Zitadel expects, for example auth.localhost:8080.
 //	SYNTHWERK_IDENTITY_ZITADEL_PAT_FILE  file with the PAT of the machine user that manages user grants (secret).
@@ -218,7 +219,8 @@ func run(ctx context.Context) error {
 	var relay *outbox.Relay
 	var aiSettings, studioPages *audit.Consumer
 	if natsURL := env.Get(app.Service, "NATS_URL", ""); natsURL != "" {
-		nc, err := nats.Connect(natsURL, nats.Name("synthwerk-"+app.Service), nats.MaxReconnects(-1))
+		nc, err := nats.Connect(natsURL, nats.Name("synthwerk-"+app.Service), nats.MaxReconnects(-1),
+			nats.CustomInboxPrefix(app.NATSInboxPrefix))
 		if err != nil {
 			return errors.New("nats does not connect") // the error text may hold credentials
 		}
