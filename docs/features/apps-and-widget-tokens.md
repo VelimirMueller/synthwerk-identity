@@ -27,7 +27,7 @@ updated: 2026-10-30
 - Creating an app writes `app.created` to the outbox in the same transaction. Update and delete write no event yet.
 - `POST /v1/apps/{appId}/widget-tokens` issues a widget token. The caller sends the Zitadel user token and the browser sends `Origin`.
 - `GET /.well-known/jwks.json` serves the public key of the widget tokens. No token needed.
-- The widget token route answers the CORS preflight (`OPTIONS`). Only a listed origin gets `Access-Control-Allow-Origin`.
+- The widget token route answers the CORS preflight (`OPTIONS`) for every origin in canonical form. The trade then decides: a listed origin gets the token, any other origin gets a readable `403 origin_not_allowed` (widgets#41).
 - `PATCH /v1/orgs/{orgId}/apps/{appId}` also sets `widget_settings`: position, theme, mode, language, accent group, greeting. New settings replace the old ones (column `apps.widget_settings`, migration 0007).
 - `GET /v1/apps/{appId}/widget-settings` returns the settings without a token, only to a listed `Origin`. The answer holds the settings only. It has a CORS preflight too (GET, no extra headers).
 - `GET /internal/v1/widget-origins?origin=<origin>` answers 204 when an app of an active org lists the origin. Else 404.
@@ -55,14 +55,17 @@ updated: 2026-10-30
 | Allow-list size | 1 to 20, no duplicates after the canonical form |
 | Widget token check order | user token → app → app org = token org, token org role → stored membership → `Origin` in the list |
 | Refusal before the origin check | 404, same as an unknown app |
-| Non-listed or missing origin, two `Origin` headers | 403 `origin_not_allowed`, no CORS header |
+| Non-listed origin in canonical form | 403 `origin_not_allowed` with `Access-Control-Allow-Origin` of that origin, so the widget can show "not allowed" (widgets#41). No token, no app data |
+| Missing, `null`, malformed or non-canonical origin, two `Origin` headers | 403 `origin_not_allowed`, no CORS header |
+| Token preflight | 204 for every origin in canonical form, the same answer for every app id. `POST`, `Authorization, Content-Type`, max age 600. Else 403 without CORS headers |
+| Readable answers of the trade for a non-listed origin | Only 403 `origin_not_allowed`. 401, 404 and 5xx carry no CORS header. Never `Access-Control-Allow-Credentials`: the trade takes a bearer token, not cookies |
 | Token | JWT, `typ` `at+jwt`, `ES256`, `kid` = RFC 7638 thumbprint |
 | Token claims | `iss`, `aud`, `sub`, `urn:zitadel:iam:user:resourceowner:id`, `client_id` (app id), `synthwerk:origin`, `iat`, `nbf`, `exp`, `jti`. No roles |
 | Lifetime | Default 10 min, max 15 min; start refuses a longer `WIDGET_TOKEN_TTL` |
 | Change or delete of an app | Tokens issued before stay valid until they expire |
 | App limit | `apps_per_org` of the org's entitlements, `0` = no limit. Row lock on `org_entitlements`: parallel creates count one after the other. No entitlements row: 500, never "no limit" |
-| Widget settings | `position` `bottom-right`/`bottom-left`, `theme` `default`/`contrast`, `mode` `system`/`light`/`dark`, `lang` `auto`/`de`/`en`, `accent` `flagship`/`lab`/`ops`/`venture`, `greeting` 0 to 280 characters, plain text, line breaks only as control characters |
-| Stored settings | jsonb, object, 4 KiB at most. A missing or unknown stored value reads as its default |
+| Widget settings | `position` `bottom-right`/`bottom-left`, `theme` `default`/`contrast`, `mode` `system`/`light`/`dark`, `lang` `auto`/`de`/`en`, `accent` `flagship`/`lab`/`ops`/`venture`, `greeting` 0 to 280 characters, plain text, line breaks only as control characters, no bidi embedding, override or isolate (U+202A to U+202E, U+2066 to U+2069; the widget refuses the same set) |
+| Stored settings | jsonb, object, 4 KiB at most. A missing or unknown stored value reads as its default. A stored greeting with a bidi control reads as no greeting |
 | Widget settings read | No token. App → org active → `Origin` in the list. Unknown app or inactive org: 404 |
 | CORS caching | Both widget routes send `Vary: Origin` on every answer, preflight and refusals included. Refusals and tokens: `Cache-Control: no-store`. Settings: `no-cache` |
 | Internal origin lookup | `GET /internal/v1/widget-origins`, port 8080, no token. Exactly one `origin` query parameter |
@@ -92,9 +95,9 @@ updated: 2026-10-30
 
 - `tests/unit/apps/origin_test.go` — `CanonicalOrigin - <case> - refused` (40 tricks), `MatchOrigin - suffix trick`, `MatchOrigin - subdomain`, `MatchOrigin - other port`, `CanonicalOrigins - same origin twice after canonical form - refused at index 1`
 - `tests/unit/widget/widget_test.go` — `Issue - default lifetime - 10 minutes, verified by the kit verifier with Zitadel claim names`, `Verify - token issued 16 minutes ago with the max lifetime - expired`, `NewIssuer - lifetime 1h0m0s - refused`, `ParseKey - RSA key - refused`
-- `tests/unit/apps/http_test.go` — `CreateWidgetToken - suffix of a listed origin - 403 origin_not_allowed, no CORS header`, `CreateWidgetToken - token of another org - 404 even on a listed origin`, `Preflight - origin not listed - 403 without CORS headers`, `CreateApp - admin token, stored role member - 403`
+- `tests/unit/apps/http_test.go` — `CreateWidgetToken - suffix of a listed origin - 403 origin_not_allowed readable to that origin, no token`, `CreateWidgetToken - null origin - 403 origin_not_allowed, no CORS header`, `CreateWidgetToken - token of another org, origin not listed - 404 unreadable, no CORS header`, `Preflight - unknown app - 204 with CORS headers, no credentials, no-store`, `Preflight - origin with a path - 403 without CORS headers`, `CreateApp - admin token, stored role member - 403`
 - `tests/unit/apps/http_test.go` — `GetWidgetSettings - new app, listed origin, no token - 200 defaults, CORS, Vary, no-cache, settings only`, `GetWidgetSettings - origin not listed - 403 origin_not_allowed, no CORS header, Vary, no-store`, `UpdateApp - free colour as accent - 400 invalid_request, nothing stored`, `CreateApp - org at its app limit - 403 app_limit_reached with the limit`
-- `tests/unit/apps/settings_test.go` — `Refused - free colour - ErrSettings`, `Greeting - 280 characters with a line break - accepted, trimmed`
+- `tests/unit/apps/settings_test.go` — `Refused - free colour - ErrSettings`, `Greeting - 280 characters with a line break - accepted, trimmed`, `Refused - greeting with RLO U+202E - ErrSettings`, `Greeting - שלום - accepted`
 - `tests/integration/apps/apps_test.go` — `Create - org at apps_per_org - LimitError, no row, no event`, `Create - eight parallel creates, one slot left - exactly one app made`, `Create - org without an entitlements row - error, never no limit`, `Settings - new app defaults, update replaces them, row from before 0007 reads as defaults`, `GetWidgetSettings - listed origin, no token - 200 stored settings, CORS, Vary, no-cache`
 - `tests/unit/apps/widgetorigins_test.go` — `WidgetOrigin - listed origin in upper case with the default port - 204, store gets the canonical form`, `WidgetOrigin - null origin - 400 invalid_request, no lookup`, `WidgetOrigin - store fails - 500, never 204`
 - `tests/integration/apps/widgetorigins_test.go` — `WidgetOrigin - origin of no app, subdomain and other port - 404`, `WidgetOrigin - org of the only app not active - 404`, `Migration - GIN index on allowed_origins - present`
@@ -108,3 +111,4 @@ updated: 2026-10-30
 | 2026-10-30 | Widget settings, the public settings route, `apps_per_org` enforced, `Vary: Origin` on every widget route answer (synthwerk#38). |
 | 2026-10-30 | `cmd/identity/main.go` also starts the `EVT_LLM` consumer of the audit list (synthwerk#39). No change to this feature. |
 | 2026-10-30 | Internal route `GET /internal/v1/widget-origins` and GIN index 0010: llm answers CORS for the widget chat (infra#21). |
+| 2026-10-30 | Token preflight open to every canonical origin, readable 403 `origin_not_allowed` (widgets#41). Greeting refuses bidi controls like the widget. |
