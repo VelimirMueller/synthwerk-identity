@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"slices"
 	"strings"
@@ -27,6 +28,8 @@ type ClientIDTokens struct {
 	// ClientFile holds one client id: plain text, or JSON with "client_id" (the
 	// studio-client.json of zitadel-bootstrap). Empty: none.
 	ClientFile string
+	// Log gets a warning when ClientFile cannot be read. Nil: no log.
+	Log *slog.Logger
 
 	mu   sync.Mutex
 	key  string
@@ -48,8 +51,14 @@ func (c *ClientIDTokens) verifier() (*auth.IDTokenVerifier, error) {
 	ids := append([]string(nil), c.ClientIDs...)
 	if c.ClientFile != "" {
 		id, err := readClientID(c.ClientFile)
-		if err != nil && len(ids) == 0 {
-			return nil, fmt.Errorf("%w: %w: %w", auth.ErrUnauthenticated, ErrNoClients, err)
+		if err != nil {
+			if c.Log != nil {
+				c.Log.Warn("account: ID token client file not read", slog.String("event.name", "account.id_token_client_file_failed"),
+					slog.String("exception.message", err.Error()))
+			}
+			if len(ids) == 0 {
+				return nil, fmt.Errorf("%w: %w: %w", auth.ErrUnauthenticated, ErrNoClients, err)
+			}
 		}
 		if id != "" && !slices.Contains(ids, id) {
 			ids = append(ids, id)

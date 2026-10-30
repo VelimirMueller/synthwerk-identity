@@ -406,7 +406,7 @@ func accountHandler(ctx context.Context, db *pgxpool.Pool, source string, idBase
 	ids := splitList(env.Get(app.Service, "ID_TOKEN_CLIENT_IDS", ""))
 	idFile := env.Get(app.Service, "ID_TOKEN_CLIENT_FILE", "")
 	if len(ids) > 0 || idFile != "" {
-		idTokens = &account.ClientIDTokens{Base: idBase, ClientIDs: ids, ClientFile: idFile}
+		idTokens = &account.ClientIDTokens{Base: idBase, ClientIDs: ids, ClientFile: idFile, Log: logger}
 	} else {
 		logger.WarnContext(ctx, "no ID token client: account delete works only with sid or auth_time in the access token",
 			slog.String("event.name", "account.id_token_off"))
