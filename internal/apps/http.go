@@ -28,7 +28,7 @@ type Repo interface {
 	Get(ctx context.Context, orgID, id string) (App, error)
 	List(ctx context.Context, orgID, after string, limit int) ([]App, error)
 	Create(ctx context.Context, org orgs.Org, actorSub, name string, origins []string) (App, error)
-	Update(ctx context.Context, org orgs.Org, actorSub, id string, name *string, origins []string) (App, error)
+	Update(ctx context.Context, org orgs.Org, actorSub, id string, c Change) (App, error)
 	Delete(ctx context.Context, org orgs.Org, actorSub, id string) error
 }
 
@@ -59,9 +59,12 @@ func (h *Handler) Register(mux *http.ServeMux, authn func(http.Handler) http.Han
 	mux.Handle("GET /v1/orgs/{orgId}/apps/{appId}", authn(http.HandlerFunc(h.getApp)))
 	mux.Handle("PATCH /v1/orgs/{orgId}/apps/{appId}", authn(http.HandlerFunc(h.updateApp)))
 	mux.Handle("DELETE /v1/orgs/{orgId}/apps/{appId}", authn(http.HandlerFunc(h.deleteApp)))
+	// Public: a signed-out visitor's widget reads its look (synthwerk#38, widgets#34).
+	mux.Handle("GET /v1/apps/{appId}/widget-settings", h.cors(http.HandlerFunc(h.getWidgetSettings)))
+	mux.Handle("OPTIONS /v1/apps/{appId}/widget-settings", h.cors(preflight(http.MethodGet, "")))
 	if h.Widget != nil {
 		mux.Handle("POST /v1/apps/{appId}/widget-tokens", h.cors(authn(http.HandlerFunc(h.createWidgetToken))))
-		mux.Handle("OPTIONS /v1/apps/{appId}/widget-tokens", h.cors(http.HandlerFunc(preflight)))
+		mux.Handle("OPTIONS /v1/apps/{appId}/widget-tokens", h.cors(preflight(http.MethodPost, "Authorization, Content-Type")))
 		mux.Handle("GET "+widget.JWKSPath, h.Widget.JWKSHandler())
 	}
 }
@@ -124,6 +127,12 @@ func (h *Handler) createApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	app, err := h.Repo.Create(r.Context(), a.Org, a.Principal.Subject, name, origins)
+	if limit, ok := errors.AsType[LimitError](err); ok {
+		h.Log.InfoContext(r.Context(), "app refused", slog.String("event.name", "apps.limit_reached"),
+			slog.String("org.id", a.Org.ID), slog.Int("limit", int(limit.Limit)))
+		orgs.WriteProblem(w, r, http.StatusForbidden, orgs.CodeAppLimitReached, fmt.Sprintf("The plan of this org allows %d apps.", limit.Limit))
+		return
+	}
 	if h.refusal(w, r, err) {
 		return
 	}
@@ -142,9 +151,19 @@ func (h *Handler) updateApp(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body) {
 		return
 	}
-	if body.Name == nil && body.AllowedOrigins == nil {
-		orgs.WriteProblem(w, r, http.StatusBadRequest, orgs.CodeInvalidRequest, "Set name, allowed_origins or both.")
+	if body.Name == nil && body.AllowedOrigins == nil && body.WidgetSettings == nil {
+		orgs.WriteProblem(w, r, http.StatusBadRequest, orgs.CodeInvalidRequest, "Set name, allowed_origins, widget_settings or more of them.")
 		return
+	}
+	var change Change
+	if body.WidgetSettings != nil {
+		ws, err := WidgetSettingsFrom(*body.WidgetSettings)
+		if err != nil {
+			orgs.WriteProblem(w, r, http.StatusBadRequest, orgs.CodeInvalidRequest,
+				fmt.Sprintf("widget_settings: every field needs an allowed value; greeting is plain text, %d characters or less.", MaxGreetingLen))
+			return
+		}
+		change.Settings = &ws
 	}
 	var name *string
 	if body.Name != nil {
@@ -161,13 +180,52 @@ func (h *Handler) updateApp(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	app, err := h.Repo.Update(r.Context(), a.Org, a.Principal.Subject, r.PathValue("appId"), name, origins)
+	change.Name, change.Origins = name, origins
+	app, err := h.Repo.Update(r.Context(), a.Org, a.Principal.Subject, r.PathValue("appId"), change)
 	if h.refusal(w, r, err) {
 		return
 	}
 	h.Log.InfoContext(r.Context(), "app updated", slog.String("event.name", "apps.updated"),
-		slog.String("org.id", a.Org.ID), slog.String("app.id", app.ID), slog.Int("origins", len(app.AllowedOrigins)))
+		slog.String("org.id", a.Org.ID), slog.String("app.id", app.ID), slog.Int("origins", len(app.AllowedOrigins)),
+		slog.Bool("widget_settings", change.Settings != nil))
 	writeJSON(w, http.StatusOK, appBody(app))
+}
+
+// getWidgetSettings answers the widget of an app without a token. Check order:
+// app → org active → Origin in the allow-list. The answer holds the settings
+// only. The route is registered through h.cors, which sets Vary: Origin on
+// every answer and Access-Control-Allow-Origin only for a listed origin;
+// refusals are no-store (WriteProblem).
+func (h *Handler) getWidgetSettings(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	app, err := h.Repo.ByID(ctx, r.PathValue("appId"))
+	if h.refusal(w, r, err) {
+		return
+	}
+	org, err := h.Orgs.Repo.OrgByID(ctx, app.OrgID)
+	if err != nil && !errors.Is(err, orgs.ErrNotFound) {
+		h.Orgs.Fail(w, r, err)
+		return
+	}
+	if err != nil || org.Status != "active" {
+		orgs.WriteProblem(w, r, http.StatusNotFound, orgs.CodeNotFound, "")
+		return
+	}
+	if _, ok := MatchOrigin(app.AllowedOrigins, singleOrigin(r)); !ok {
+		orgs.WriteProblem(w, r, http.StatusForbidden, orgs.CodeOriginNotAllowed, "")
+		return
+	}
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(app.WidgetSettings.API()); err != nil {
+		h.Orgs.Fail(w, r, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	// no-cache, not no-store: a cache may keep it but must ask again, so a studio
+	// change shows on the next page load.
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(buf.Bytes())
 }
 
 func (h *Handler) deleteApp(w http.ResponseWriter, r *http.Request) {
@@ -314,18 +372,23 @@ func (h *Handler) cors(next http.Handler) http.Handler {
 	})
 }
 
-// preflight answers the CORS preflight: 204 for an allowed origin (cors set the
-// header), else 403 without CORS headers.
-func preflight(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
-	if w.Header().Get("Access-Control-Allow-Origin") == "" {
-		w.WriteHeader(http.StatusForbidden)
-		return
-	}
-	w.Header().Set("Access-Control-Allow-Methods", http.MethodPost)
-	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
-	w.Header().Set("Access-Control-Max-Age", preflightMaxAge)
-	w.WriteHeader(http.StatusNoContent)
+// preflight answers the CORS preflight for method: 204 for an allowed origin
+// (cors set the header and Vary: Origin), else 403 without CORS headers. headers
+// is the Access-Control-Allow-Headers value, "" for none.
+func preflight(method, headers string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		if w.Header().Get("Access-Control-Allow-Origin") == "" {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Access-Control-Allow-Methods", method)
+		if headers != "" {
+			w.Header().Set("Access-Control-Allow-Headers", headers)
+		}
+		w.Header().Set("Access-Control-Max-Age", preflightMaxAge)
+		w.WriteHeader(http.StatusNoContent)
+	})
 }
 
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {
@@ -392,6 +455,7 @@ func appBody(a App) identity.App {
 		OrgId:          uuid.MustParse(a.OrgID),
 		Name:           a.Name,
 		AllowedOrigins: a.AllowedOrigins,
+		WidgetSettings: a.WidgetSettings.API(),
 		CreatedAt:      a.CreatedAt.UTC(),
 		UpdatedAt:      a.UpdatedAt.UTC(),
 	}

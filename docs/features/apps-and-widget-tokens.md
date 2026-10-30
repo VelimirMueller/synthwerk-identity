@@ -4,11 +4,11 @@ slug: apps-and-widget-tokens
 status: beta
 epic: E2
 owner: identity
-paths: ["internal/apps/**", "internal/widget/**", "migrations/0004_apps.sql", "cmd/identity/main.go"]
-api: ["GET /v1/orgs/{orgId}/apps", "POST /v1/orgs/{orgId}/apps", "GET /v1/orgs/{orgId}/apps/{appId}", "PATCH /v1/orgs/{orgId}/apps/{appId}", "DELETE /v1/orgs/{orgId}/apps/{appId}", "POST /v1/apps/{appId}/widget-tokens"]
+paths: ["internal/apps/**", "internal/widget/**", "migrations/0004_apps.sql", "migrations/0007_app_widget_settings.sql", "cmd/identity/main.go"]
+api: ["GET /v1/orgs/{orgId}/apps", "POST /v1/orgs/{orgId}/apps", "GET /v1/orgs/{orgId}/apps/{appId}", "PATCH /v1/orgs/{orgId}/apps/{appId}", "DELETE /v1/orgs/{orgId}/apps/{appId}", "POST /v1/apps/{appId}/widget-tokens", "GET /v1/apps/{appId}/widget-settings"]
 events: ["dev.synthwerk.identity.app.created.v1"]
 mcp: []
-updated: 2026-10-29
+updated: 2026-10-30
 ---
 
 # Apps and widget tokens
@@ -17,6 +17,8 @@ updated: 2026-10-29
 > - An org registers apps. Each app has an origin allow-list (synthwerk#30).
 > - A widget gets a widget token only for a signed-in member of the org, and only on a listed origin.
 > - The token is a JWT signed by identity. It lives 10 minutes by default, 15 minutes at most.
+> - Each app has widget settings. The widget reads them without a token, only from a listed origin (synthwerk#38).
+> - An org gets at most `apps_per_org` apps from its plan (synthwerk#38).
 
 ## What it does
 
@@ -25,6 +27,9 @@ updated: 2026-10-29
 - `POST /v1/apps/{appId}/widget-tokens` issues a widget token. The caller sends the Zitadel user token and the browser sends `Origin`.
 - `GET /.well-known/jwks.json` serves the public key of the widget tokens. No token needed.
 - The widget token route answers the CORS preflight (`OPTIONS`). Only a listed origin gets `Access-Control-Allow-Origin`.
+- `PATCH /v1/orgs/{orgId}/apps/{appId}` also sets `widget_settings`: position, theme, mode, language, accent group, greeting. New settings replace the old ones (column `apps.widget_settings`, migration 0007).
+- `GET /v1/apps/{appId}/widget-settings` returns the settings without a token, only to a listed `Origin`. The answer holds the settings only. It has a CORS preflight too (GET, no extra headers).
+- `POST /v1/orgs/{orgId}/apps` counts the apps of the org under a row lock on its entitlements. At `apps_per_org` it answers 403 `app_limit_reached`.
 
 ## How to use
 
@@ -51,6 +56,11 @@ updated: 2026-10-29
 | Token claims | `iss`, `aud`, `sub`, `urn:zitadel:iam:user:resourceowner:id`, `client_id` (app id), `synthwerk:origin`, `iat`, `nbf`, `exp`, `jti`. No roles |
 | Lifetime | Default 10 min, max 15 min; start refuses a longer `WIDGET_TOKEN_TTL` |
 | Change or delete of an app | Tokens issued before stay valid until they expire |
+| App limit | `apps_per_org` of the org's entitlements, `0` = no limit. Row lock on `org_entitlements`: parallel creates count one after the other. No entitlements row: 500, never "no limit" |
+| Widget settings | `position` `bottom-right`/`bottom-left`, `theme` `default`/`contrast`, `mode` `system`/`light`/`dark`, `lang` `auto`/`de`/`en`, `accent` `flagship`/`lab`/`ops`/`venture`, `greeting` 0 to 280 characters, plain text, line breaks only as control characters |
+| Stored settings | jsonb, object, 4 KiB at most. A missing or unknown stored value reads as its default |
+| Widget settings read | No token. App → org active → `Origin` in the list. Unknown app or inactive org: 404 |
+| CORS caching | Both widget routes send `Vary: Origin` on every answer, preflight and refusals included. Refusals and tokens: `Cache-Control: no-store`. Settings: `no-cache` |
 | Signing key | Read once at start; a new key needs a restart. One key in the key set |
 
 ## Events
@@ -67,6 +77,7 @@ updated: 2026-10-29
 | 401 | `unauthenticated` | User token missing or not valid. A widget token is not a user token. |
 | 403 | `forbidden` | Role does not allow the write. Generic body. |
 | 403 | `origin_not_allowed` | `Origin` is missing or not in the allow-list. |
+| 403 | `app_limit_reached` | The org has `apps_per_org` apps already. The detail names the limit. |
 | 404 | `not_found` | Unknown app or org, or the caller is not a member. |
 
 ## Tests
@@ -74,6 +85,9 @@ updated: 2026-10-29
 - `tests/unit/apps/origin_test.go` — `CanonicalOrigin - <case> - refused` (40 tricks), `MatchOrigin - suffix trick`, `MatchOrigin - subdomain`, `MatchOrigin - other port`, `CanonicalOrigins - same origin twice after canonical form - refused at index 1`
 - `tests/unit/widget/widget_test.go` — `Issue - default lifetime - 10 minutes, verified by the kit verifier with Zitadel claim names`, `Verify - token issued 16 minutes ago with the max lifetime - expired`, `NewIssuer - lifetime 1h0m0s - refused`, `ParseKey - RSA key - refused`
 - `tests/unit/apps/http_test.go` — `CreateWidgetToken - suffix of a listed origin - 403 origin_not_allowed, no CORS header`, `CreateWidgetToken - token of another org - 404 even on a listed origin`, `Preflight - origin not listed - 403 without CORS headers`, `CreateApp - admin token, stored role member - 403`
+- `tests/unit/apps/http_test.go` — `GetWidgetSettings - new app, listed origin, no token - 200 defaults, CORS, Vary, no-cache, settings only`, `GetWidgetSettings - origin not listed - 403 origin_not_allowed, no CORS header, Vary, no-store`, `UpdateApp - free colour as accent - 400 invalid_request, nothing stored`, `CreateApp - org at its app limit - 403 app_limit_reached with the limit`
+- `tests/unit/apps/settings_test.go` — `Refused - free colour - ErrSettings`, `Greeting - 280 characters with a line break - accepted, trimmed`
+- `tests/integration/apps/apps_test.go` — `Create - org at apps_per_org - LimitError, no row, no event`, `Create - eight parallel creates, one slot left - exactly one app made`, `Create - org without an entitlements row - error, never no limit`, `Settings - new app defaults, update replaces them, row from before 0007 reads as defaults`, `GetWidgetSettings - listed origin, no token - 200 stored settings, CORS, Vary, no-cache`
 - `tests/integration/apps/apps_test.go` — `Create - owner - app row and app.created in one commit, no origins in the event`, `CreateWidgetToken - member on a listed origin - 201, verified with the key set, bound to user, org, app and origin`, `UpdateApp - origin removed - widget token on that origin 403`, `CreateWidgetToken - member left the org, old token - 404`
 
 ## Changes
@@ -81,3 +95,4 @@ updated: 2026-10-29
 | Date | Change |
 |---|---|
 | 2026-10-29 | First version (synthwerk#30). |
+| 2026-10-30 | Widget settings, the public settings route, `apps_per_org` enforced, `Vary: Origin` on every widget route answer (synthwerk#38). |

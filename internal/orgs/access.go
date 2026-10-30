@@ -37,4 +37,5 @@ const (
 	CodeInvalidRequest   = codeInvalidRequest
 	CodeNotFound         = codeNotFound
 	CodeOriginNotAllowed = codeOriginNotAllowed
+	CodeAppLimitReached  = codeAppLimitReached
 )

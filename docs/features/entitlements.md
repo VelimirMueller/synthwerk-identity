@@ -8,7 +8,7 @@ paths: ["internal/entitlements/**", "migrations/0006_entitlements.sql", "cmd/ide
 api: ["GET /v1/me/entitlements", "GET /v1/orgs/{orgId}/entitlements"]
 events: ["dev.synthwerk.identity.org.entitlements_changed.v1"]
 mcp: []
-updated: 2026-10-29
+updated: 2026-10-30
 ---
 
 # Entitlements
@@ -43,7 +43,7 @@ updated: 2026-10-29
 | Pending org | No plan yet; the API answers 404 |
 | Version | Starts at 1, goes up by one on every change; the event has the same value |
 | Two replicas start at once | Reconcile skips rows another replica holds; each change is written once |
-| Enforcement | Not here. llm enforces the token limits; the apps limit is not enforced yet |
+| Enforcement | llm enforces the token limits. Identity enforces `apps_per_org` on app create (403 `app_limit_reached`, synthwerk#38, [apps](apps-and-widget-tokens.md)) |
 
 ## Events
 
@@ -73,3 +73,4 @@ updated: 2026-10-29
 | Date | Change |
 |---|---|
 | 2026-10-29 | First version: free plan per org, two read routes, `org.entitlements_changed.v1` (synthwerk#31). |
+| 2026-10-30 | `apps_per_org` is enforced on app create (synthwerk#38). |

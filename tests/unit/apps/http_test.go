@@ -72,12 +72,18 @@ func (fakeOrgs) ChangeRole(context.Context, orgs.Org, string, string, orgs.Role)
 
 // fakeApps is apps.Repo with one app. created counts Create calls.
 type fakeApps struct {
-	roles   map[string]orgs.Role
-	created int
+	roles    map[string]orgs.Role
+	created  int
+	limit    int32 // > 0: Create refuses with a LimitError
+	settings *apps.WidgetSettings
 }
 
 func (f *fakeApps) app() apps.App {
-	return apps.App{ID: appID, OrgID: orgID, Name: "Shop", AllowedOrigins: []string{shop, "http://localhost:3000"}, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	ws := apps.DefaultWidgetSettings()
+	if f.settings != nil {
+		ws = *f.settings
+	}
+	return apps.App{ID: appID, OrgID: orgID, Name: "Shop", AllowedOrigins: []string{shop, "http://localhost:3000"}, WidgetSettings: ws, CreatedAt: time.Now(), UpdatedAt: time.Now()}
 }
 
 func (f *fakeApps) ByID(_ context.Context, id string) (apps.App, error) {
@@ -102,16 +108,22 @@ func (f *fakeApps) Create(_ context.Context, _ orgs.Org, actor, name string, ori
 	if !f.roles[actor].AtLeast(orgs.Admin) {
 		return apps.App{}, apps.ErrForbidden
 	}
+	if f.limit > 0 {
+		return apps.App{}, apps.LimitError{Limit: f.limit}
+	}
 	f.created++
 	a := f.app()
 	a.Name, a.AllowedOrigins = name, origins
 	return a, nil
 }
 
-func (f *fakeApps) Update(ctx context.Context, _ orgs.Org, _, id string, _ *string, origins []string) (apps.App, error) {
+func (f *fakeApps) Update(ctx context.Context, _ orgs.Org, _, id string, c apps.Change) (apps.App, error) {
+	if c.Settings != nil {
+		f.settings = c.Settings
+	}
 	a, err := f.ByID(ctx, id)
-	if origins != nil {
-		a.AllowedOrigins = origins
+	if c.Origins != nil {
+		a.AllowedOrigins = c.Origins
 	}
 	return a, err
 }
@@ -198,7 +210,7 @@ func TestWidgetToken(t *testing.T) {
 		if body.TokenType != "Bearer" || body.ExpiresIn < 1 || body.ExpiresIn > 900 || body.Origin != shop || body.AccessToken == "" {
 			t.Fatalf("body %s", rec.Body)
 		}
-		if rec.Header().Get("Access-Control-Allow-Origin") != shop || rec.Header().Get("Cache-Control") != "no-store" {
+		if rec.Header().Get("Access-Control-Allow-Origin") != shop || rec.Header().Get("Cache-Control") != "no-store" || rec.Header().Get("Vary") != "Origin" {
 			t.Fatalf("headers %v", rec.Header())
 		}
 	})
@@ -224,6 +236,9 @@ func TestWidgetToken(t *testing.T) {
 			}
 			if rec.Header().Get("Access-Control-Allow-Origin") != "" || strings.Contains(rec.Body.String(), "access_token") {
 				t.Fatalf("leak: %v %s", rec.Header(), rec.Body)
+			}
+			if rec.Header().Get("Vary") != "Origin" || rec.Header().Get("Cache-Control") != "no-store" {
+				t.Fatalf("cache headers %v", rec.Header())
 			}
 		})
 	}
@@ -277,7 +292,8 @@ func TestWidgetToken(t *testing.T) {
 	})
 	t.Run("Preflight - origin not listed - 403 without CORS headers", func(t *testing.T) {
 		rec := f.do(t, http.MethodOptions, tokens, "", "", "https://shop.example.evil.test")
-		if rec.Code != http.StatusForbidden || rec.Header().Get("Access-Control-Allow-Origin") != "" {
+		if rec.Code != http.StatusForbidden || rec.Header().Get("Access-Control-Allow-Origin") != "" ||
+			rec.Header().Get("Vary") != "Origin" || rec.Header().Get("Cache-Control") != "no-store" {
 			t.Fatalf("%d %v", rec.Code, rec.Header())
 		}
 	})
@@ -378,6 +394,106 @@ func TestAppRoutes(t *testing.T) {
 		}
 		if rec := f.do(t, http.MethodDelete, list+"/019a3b10-0000-7000-8000-000000000000", ownerTok, ""); rec.Code != http.StatusNotFound {
 			t.Fatalf("unknown %d", rec.Code)
+		}
+	})
+}
+
+const settingsPath = "/v1/apps/" + appID + "/widget-settings"
+
+func TestWidgetSettings(t *testing.T) {
+	f := newFixture(t)
+	list := "/v1/orgs/" + orgID + "/apps"
+	ownerTok := f.tok(t, owner, zorg, "owner")
+	full := `{"widget_settings":{"position":"bottom-left","theme":"contrast","mode":"dark","lang":"de","accent":"lab","greeting":"  Hallo!\nWie kann ich helfen?  "}}`
+
+	t.Run("GetWidgetSettings - new app, listed origin, no token - 200 defaults, CORS, Vary, no-cache, settings only", func(t *testing.T) {
+		rec := f.do(t, http.MethodGet, settingsPath, "", "", shop)
+		h := rec.Header()
+		if rec.Code != http.StatusOK || h.Get("Access-Control-Allow-Origin") != shop || h.Get("Vary") != "Origin" || h.Get("Cache-Control") != "no-cache" {
+			t.Fatalf("%d %v %s", rec.Code, h, rec.Body)
+		}
+		want := `{"accent":"flagship","greeting":"","lang":"auto","mode":"system","position":"bottom-right","theme":"default"}` + "\n"
+		if rec.Body.String() != want {
+			t.Fatalf("body %s", rec.Body)
+		}
+	})
+	t.Run("UpdateApp - owner, widget settings - 200, greeting trimmed, public read shows them", func(t *testing.T) {
+		rec := f.do(t, http.MethodPatch, list+"/"+appID, ownerTok, full)
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"greeting":"Hallo!\nWie kann ich helfen?"`) ||
+			!strings.Contains(rec.Body.String(), `"accent":"lab"`) {
+			t.Fatalf("%d %s", rec.Code, rec.Body)
+		}
+		got := f.do(t, http.MethodGet, settingsPath, "", "", "http://localhost:3000")
+		if got.Code != http.StatusOK || !strings.Contains(got.Body.String(), `"position":"bottom-left"`) || strings.Contains(got.Body.String(), "shop.example") {
+			t.Fatalf("%d %s", got.Code, got.Body)
+		}
+	})
+	for _, c := range []struct{ name, body string }{
+		{"free colour as accent", `{"widget_settings":{"position":"bottom-left","theme":"default","mode":"dark","lang":"de","accent":"#ff0000","greeting":""}}`},
+		{"unknown theme", `{"widget_settings":{"position":"bottom-left","theme":"neon","mode":"dark","lang":"de","accent":"lab","greeting":""}}`},
+		{"missing field", `{"widget_settings":{"position":"bottom-left","theme":"default","mode":"dark","lang":"de","greeting":""}}`},
+		{"greeting too long", `{"widget_settings":{"position":"bottom-left","theme":"default","mode":"dark","lang":"de","accent":"lab","greeting":"` + strings.Repeat("a", 281) + `"}}`},
+		{"control character in the greeting", `{"widget_settings":{"position":"bottom-left","theme":"default","mode":"dark","lang":"de","accent":"lab","greeting":"a\u0007b"}}`},
+		{"unknown settings field", `{"widget_settings":{"position":"bottom-left","theme":"default","mode":"dark","lang":"de","accent":"lab","greeting":"","css":"x"}}`},
+	} {
+		t.Run("UpdateApp - "+c.name+" - 400 invalid_request, nothing stored", func(t *testing.T) {
+			before := f.apps.settings
+			rec := f.do(t, http.MethodPatch, list+"/"+appID, ownerTok, c.body)
+			if rec.Code != http.StatusBadRequest || f.apps.settings != before {
+				t.Fatalf("%d %s", rec.Code, rec.Body)
+			}
+		})
+	}
+	t.Run("UpdateApp - member token, widget settings - 403", func(t *testing.T) {
+		if rec := f.do(t, http.MethodPatch, list+"/"+appID, f.tok(t, member, zorg, "member"), full); rec.Code != http.StatusForbidden {
+			t.Fatalf("%d", rec.Code)
+		}
+	})
+
+	for _, c := range []struct {
+		name    string
+		origins []string
+	}{
+		{"origin not listed", []string{"https://evil.test"}},
+		{"suffix of a listed origin", []string{"https://shop.example.evil.test"}},
+		{"no Origin header", nil},
+		{"two Origin headers", []string{shop, shop}},
+	} {
+		t.Run("GetWidgetSettings - "+c.name+" - 403 origin_not_allowed, no CORS header, Vary, no-store", func(t *testing.T) {
+			rec := f.do(t, http.MethodGet, settingsPath, "", "", c.origins...)
+			h := rec.Header()
+			if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"code":"origin_not_allowed"`) ||
+				h.Get("Access-Control-Allow-Origin") != "" || h.Get("Vary") != "Origin" || h.Get("Cache-Control") != "no-store" {
+				t.Fatalf("%d %v %s", rec.Code, h, rec.Body)
+			}
+		})
+	}
+	t.Run("GetWidgetSettings - unknown or malformed app - 404, Vary", func(t *testing.T) {
+		for _, p := range []string{"/v1/apps/019a3b10-0000-7000-8000-000000000000/widget-settings", "/v1/apps/x/widget-settings"} {
+			if rec := f.do(t, http.MethodGet, p, "", "", shop); rec.Code != http.StatusNotFound || rec.Header().Get("Vary") != "Origin" {
+				t.Fatalf("%s %d %v", p, rec.Code, rec.Header())
+			}
+		}
+	})
+	t.Run("Preflight settings - listed origin - 204 GET only, Vary; other origin - 403 no-store, Vary", func(t *testing.T) {
+		rec := f.do(t, http.MethodOptions, settingsPath, "", "", shop)
+		h := rec.Header()
+		if rec.Code != http.StatusNoContent || h.Get("Access-Control-Allow-Origin") != shop || h.Get("Access-Control-Allow-Methods") != http.MethodGet ||
+			h.Get("Access-Control-Allow-Headers") != "" || h.Get("Vary") != "Origin" {
+			t.Fatalf("%d %v", rec.Code, h)
+		}
+		rec = f.do(t, http.MethodOptions, settingsPath, "", "", "https://evil.test")
+		if rec.Code != http.StatusForbidden || rec.Header().Get("Vary") != "Origin" || rec.Header().Get("Cache-Control") != "no-store" {
+			t.Fatalf("%d %v", rec.Code, rec.Header())
+		}
+	})
+	t.Run("CreateApp - org at its app limit - 403 app_limit_reached with the limit", func(t *testing.T) {
+		f.apps.limit = 3
+		defer func() { f.apps.limit = 0 }()
+		rec := f.do(t, http.MethodPost, list, ownerTok, `{"name":"Fourth","allowed_origins":["https://a.example"]}`)
+		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"code":"app_limit_reached"`) ||
+			!strings.Contains(rec.Body.String(), "allows 3 apps") {
+			t.Fatalf("%d %s", rec.Code, rec.Body)
 		}
 	})
 }
