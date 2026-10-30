@@ -34,8 +34,9 @@ type Client struct {
 	Host string
 	// Token returns the PAT. It is read per call, so a PAT written after the start works.
 	Token func() (string, error)
-	// ProjectID is the project synthwerk-api whose grants hold the org roles.
-	ProjectID string
+	// Project resolves the project synthwerk-api whose grants hold the org roles.
+	// Nil or not resolved yet: calls that need it fail with orgs.ErrNotReady.
+	Project *Project
 	// HTTP is the client. Nil: a client with a 10 s timeout.
 	HTTP *http.Client
 
@@ -110,6 +111,10 @@ func (c *Client) SetRole(ctx context.Context, zitadelOrgID, userSub, grantID str
 }
 
 func (c *Client) findGrant(ctx context.Context, zitadelOrgID, userSub string) (string, error) {
+	projectID, err := c.Project.Resolve(ctx)
+	if err != nil {
+		return "", err
+	}
 	var found struct {
 		Result []struct {
 			ID string `json:"id"`
@@ -117,7 +122,7 @@ func (c *Client) findGrant(ctx context.Context, zitadelOrgID, userSub string) (s
 	}
 	q := map[string]any{"queries": []any{
 		map[string]any{"userIdQuery": map[string]any{"userId": userSub}},
-		map[string]any{"projectIdQuery": map[string]any{"projectId": c.ProjectID}},
+		map[string]any{"projectIdQuery": map[string]any{"projectId": projectID}},
 	}}
 	if err := c.do(ctx, http.MethodPost, "/management/v1/users/grants/_search", zitadelOrgID, q, &found); err != nil {
 		return "", err
@@ -126,6 +131,30 @@ func (c *Client) findGrant(ctx context.Context, zitadelOrgID, userSub string) (s
 		return "", fmt.Errorf("zitadel: want 1 grant of the user in project, got %d", len(found.Result))
 	}
 	return found.Result[0].ID, nil
+}
+
+// GrantActive implements orgs.GrantStates: it reads the user grant and reports
+// whether its state is active. A grant Zitadel does not know (404) is not active.
+func (c *Client) GrantActive(ctx context.Context, zitadelOrgID, userSub, grantID string) (bool, error) {
+	if userSub == "" || grantID == "" {
+		return false, errors.New("zitadel: grant state: empty id")
+	}
+	var got struct {
+		UserGrant struct {
+			State string `json:"state"`
+		} `json:"userGrant"`
+	}
+	path := "/management/v1/users/" + url.PathEscape(userSub) + "/grants/" + url.PathEscape(grantID)
+	err := c.do(ctx, http.MethodGet, path, zitadelOrgID, nil, &got)
+	var e *APIError
+	// Code 5 is gRPC NOT_FOUND, as in Uninvite. Not found = not active (fail closed).
+	if errors.As(err, &e) && (e.Status == http.StatusNotFound || e.Code == 5) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return got.UserGrant.State == "USER_GRANT_STATE_ACTIVE", nil
 }
 
 // DeleteUser implements account.Users (synthwerk#41): UserService v2 DeleteUser.

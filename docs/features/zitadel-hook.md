@@ -26,7 +26,9 @@ updated: 2026-10-30
 - Stores the key `<instance>:<aggregate type>:<aggregate id>:<sequence>` and the outbox row in one transaction.
 - Never decodes or logs the `event_payload` of user events (email, names).
 - Shares its listener with the MFA gate and the token claims ([mfa-gate](mfa-gate.md), synthwerk#94). Each target has its own signing key file.
-- Mirrors user grant events (`user.grant.added|changed|removed|cascade.removed`) of project `SYNTHWERK_IDENTITY_ZITADEL_PROJECT_ID` into memberships; see [orgs-and-roles](orgs-and-roles.md). Their payload holds ids and role keys only.
+- Mirrors user grant events (`user.grant.added|changed|removed|cascade.removed`) of project `synthwerk-api` into memberships; see [orgs-and-roles](orgs-and-roles.md). Their payload holds ids and role keys only.
+- The project id comes from `SYNTHWERK_IDENTITY_ZITADEL_PROJECT_ID`, or from the file `SYNTHWERK_IDENTITY_ZITADEL_PROJECT_ID_FILE` that `zitadel-bootstrap` writes after identity starts. identity reads the file per call until it holds an id, then keeps it.
+- Mirrors `user.grant.deactivated` and `user.grant.reactivated` into the member status (synthwerk#37). These events have no payload: identity finds the member by grant id in the org of the event.
 
 ## How to use
 
@@ -40,6 +42,11 @@ updated: 2026-10-30
 | Body | 64 KiB max |
 | Signature age | 300 s, both directions |
 | Grants of another project | 204, ignored |
+| Grant event that names a project before the project id is known | 503, nothing changes |
+| Deactivate of an active member | Status `deactivated`, `member.deactivated` with actor `system`, audit row |
+| Reactivate of a deactivated member | Only when Zitadel confirms the grant is active now. Then status `active`, `member.reactivated` with actor `system`. Else 204, WARN log, member stays deactivated. A failed read answers 500 and the event is not marked seen. |
+| Deactivate or reactivate of an unknown grant, a grant of another org, an invited member, a member in that status already | 204, ignored, no event (idempotent: the echo of an identity change writes nothing) |
+| Deactivate of the last active owner | 204, mirror keeps the owner active, WARN log. Zitadel tokens carry no org role for that grant, so the org gate refuses the owner anyway. |
 | Grant that would remove the last owner | 204, mirror keeps the owner, WARN log |
 | Grant of a deleted account (synthwerk#41) | 204, ignored: no membership comes back |
 | Other event types | 204, ignored |
@@ -68,7 +75,10 @@ updated: 2026-10-30
 - `tests/unit/zitadelhook/hook_test.go` — `user.human.added - signed - one user.created event, no personal data in logs or event`
 - `tests/unit/zitadelhook/hook_test.go` — `same call twice - one event`
 - `tests/unit/zitadelhook/hook_test.go` — `unsigned, wrong key, changed body, old or future timestamp - 401, no write`
-- `tests/unit/zitadelhook/grant_test.go` — `user.grant.added - project grant - mirrored with user, roles and org name`, `user.grant.changed - base64 payload - decoded`, `user.grant.added - other project - dropped`
+- `tests/unit/zitadelhook/grant_test.go` — `user.grant.added - project grant - mirrored with user, roles and org name`, `user.grant.changed - base64 payload - decoded`, `user.grant.added - other project - dropped`, `user.grant.added - project id not known yet - 503, nothing mirrored`
+- `tests/unit/zitadelhook/grant_test.go` — `TestGrantStatusEvents`: deactivated and reactivated with no payload, platform org dropped, wrong aggregate 400, unsigned 401, store error 500
+- `tests/integration/orgs/grantstatus_test.go` — `TestApplyGrantStatus`: deactivate with audit row, repeat and echo, confirmed and unconfirmed reactivate, read error rolled back, last owner, unknown grant, invited member, deleted account
+- `tests/unit/zitadel/project_test.go` — `Resolve - file written after the start - ErrNotReady first, then the id, then kept`
 - synthwerk-infra `tests/stack/stack_test.sh` — `test users from the bootstrap - user.created rows in the outbox; hook path through the edge - 404`
 
 ## Changes
@@ -80,3 +90,4 @@ updated: 2026-10-30
 | 2026-10-29 | The listener also serves the MFA gate (synthwerk#94). |
 | 2026-10-30 | Grant events of a deleted account are ignored (synthwerk#41). |
 | 2026-10-30 | `cmd/identity/main.go` also starts the `EVT_LLM` consumer of the audit list (synthwerk#39). No change to this feature. |
+| 2026-10-30 | Project id from a file written by the bootstrap; grant deactivate and reactivate events set the member status (synthwerk#37). |

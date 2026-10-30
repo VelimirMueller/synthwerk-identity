@@ -76,6 +76,9 @@ type Store struct {
 	// Users invites users and switches user grants on and off (synthwerk#37). Nil:
 	// invite answers ErrUpstream, a status change stays in identity.
 	Users Users
+	// GrantStates confirms a reactivate event before the hook mirrors it
+	// (ApplyGrantStatus). Nil: a reactivate event changes nothing.
+	GrantStates GrantStates
 	// Log gets drift warnings after a failed commit. Nil: slog.Default.
 	Log *slog.Logger
 	// Source is the CloudEvents source, /synthwerk/identity/<env>.

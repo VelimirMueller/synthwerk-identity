@@ -25,6 +25,11 @@ func (c *Client) Invite(ctx context.Context, zitadelOrgID, email string, role or
 	if !role.Valid() {
 		return "", "", ErrRefused
 	}
+	// The project first: before the Zitadel setup is done, nothing is written.
+	projectID, err := c.Project.Resolve(ctx)
+	if err != nil {
+		return "", "", err
+	}
 	platform, err := c.PlatformOrg(ctx)
 	if err != nil {
 		return "", "", err
@@ -32,7 +37,7 @@ func (c *Client) Invite(ctx context.Context, zitadelOrgID, email string, role or
 	if zitadelOrgID == platform {
 		return "", "", ErrRefused
 	}
-	grantID, err := c.projectGrant(ctx, zitadelOrgID)
+	grantID, err := c.projectGrant(ctx, zitadelOrgID, projectID)
 	if err != nil {
 		return "", "", err
 	}
@@ -73,7 +78,7 @@ func (c *Client) Invite(ctx context.Context, zitadelOrgID, email string, role or
 	}
 	path := "/management/v1/users/" + url.PathEscape(created.UserID) + "/grants"
 	err = c.do(ctx, http.MethodPost, path, zitadelOrgID, map[string]any{
-		"projectId": c.ProjectID, "projectGrantId": grantID, "roleKeys": []string{string(role)},
+		"projectId": projectID, "projectGrantId": grantID, "roleKeys": []string{string(role)},
 	}, &grant)
 	if err == nil {
 		path = "/v2/users/" + url.PathEscape(created.UserID) + "/invite_code"
@@ -146,7 +151,7 @@ func (c *Client) SetActive(ctx context.Context, zitadelOrgID, userSub, grantID s
 }
 
 // projectGrant returns the id of the project grant of synthwerk-api to the org.
-func (c *Client) projectGrant(ctx context.Context, zitadelOrgID string) (string, error) {
+func (c *Client) projectGrant(ctx context.Context, zitadelOrgID, projectID string) (string, error) {
 	var found struct {
 		Result []struct {
 			ProjectID string `json:"projectId"`
@@ -157,11 +162,11 @@ func (c *Client) projectGrant(ctx context.Context, zitadelOrgID string) (string,
 		return "", err
 	}
 	for _, p := range found.Result {
-		if p.ProjectID == c.ProjectID && p.GrantID != "" {
+		if p.ProjectID == projectID && p.GrantID != "" {
 			return p.GrantID, nil
 		}
 	}
-	return "", fmt.Errorf("zitadel: org %s has no grant of project %s", zitadelOrgID, c.ProjectID)
+	return "", fmt.Errorf("zitadel: org %s has no grant of project %s", zitadelOrgID, projectID)
 }
 
 // userInOrg returns the id of the user of the org with email (any case), or "".

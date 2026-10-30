@@ -2,7 +2,9 @@
 // It checks the signature, drops repeats and
 //   - turns user.human.added into the event dev.synthwerk.identity.user.created.v1,
 //   - mirrors the user grants of the project (user.grant.*) into memberships
-//     (package orgs), which writes org.created and member.role_changed.
+//     (package orgs), which writes org.created and member.role_changed,
+//   - mirrors a deactivated or reactivated user grant into the member status
+//     (synthwerk#37), which writes member.deactivated or member.reactivated.
 //
 // The handler listens on its own address, which only the network zitadel-hooks
 // reaches. The edge routes /identity/* to the API port and never to this one.
@@ -40,8 +42,11 @@ const (
 	ZitadelGrantChanged        = "user.grant.changed"
 	ZitadelGrantRemoved        = "user.grant.removed"
 	ZitadelGrantCascadeRemoved = "user.grant.cascade.removed"
-	UserCreated                = "dev.synthwerk.identity.user.created.v1"
-	UserCreatedData            = "https://schemas.synthwerk.dev/events/identity/user.created.v1.json"
+	// Deactivate and reactivate of a user grant carry no payload (synthwerk#37).
+	ZitadelGrantDeactivated = "user.grant.deactivated"
+	ZitadelGrantReactivated = "user.grant.reactivated"
+	UserCreated             = "dev.synthwerk.identity.user.created.v1"
+	UserCreatedData         = "https://schemas.synthwerk.dev/events/identity/user.created.v1.json"
 )
 
 // Call is the part of a Zitadel event call that identity reads. The call also
@@ -61,10 +66,15 @@ type Call struct {
 // GrantEvents are the user grant events the hook mirrors.
 var GrantEvents = []string{ZitadelGrantAdded, ZitadelGrantChanged, ZitadelGrantRemoved, ZitadelGrantCascadeRemoved}
 
+// GrantStatusEvents are the user grant events the hook mirrors into the member
+// status (synthwerk#37).
+var GrantStatusEvents = []string{ZitadelGrantDeactivated, ZitadelGrantReactivated}
+
 // GrantMirror applies a user grant event to the memberships (orgs.Store).
 type GrantMirror interface {
 	OrgByZitadelID(ctx context.Context, zitadelOrgID string) (orgs.Org, error)
 	ApplyGrant(ctx context.Context, c orgs.GrantChange, orgName string) (orgs.Outcome, error)
+	ApplyGrantStatus(ctx context.Context, c orgs.GrantStatusChange) (orgs.Outcome, error)
 }
 
 // Key identifies one Zitadel event: an aggregate's sequence is unique per instance.
@@ -97,9 +107,11 @@ type Handler struct {
 	Now func() time.Time
 	// Grants mirrors user grant events. Nil: grant events are acknowledged and dropped.
 	Grants GrantMirror
-	// ProjectID is the Zitadel project synthwerk-api. Grants of other projects are
-	// dropped. Empty: every project counts.
-	ProjectID string
+	// Project returns the id of the Zitadel project synthwerk-api. Grants of other
+	// projects are dropped. While it fails (orgs.ErrNotReady: zitadel-bootstrap has
+	// not written the id yet), a grant event that names a project answers 503 and
+	// changes nothing. Nil: every project counts.
+	Project func(ctx context.Context) (string, error)
 	// PlatformOrg returns the platform org. Its grants (operator) are never mirrored.
 	// Nil: no org is skipped.
 	PlatformOrg func(ctx context.Context) (string, error)
@@ -141,6 +153,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if slices.Contains(GrantEvents, c.EventType) {
 		h.grant(w, r, c)
+		return
+	}
+	if slices.Contains(GrantStatusEvents, c.EventType) {
+		h.grantStatus(w, r, c)
 		return
 	}
 	if c.EventType != ZitadelUserAdded {
@@ -223,19 +239,21 @@ func (h *Handler) grant(w http.ResponseWriter, r *http.Request, c Call) {
 	}
 	// changed and removed events may not name the project: the store then acts only
 	// on a grant it mirrored before (by grant id), which was of this project.
-	if h.PlatformOrg != nil {
-		platform, err := h.PlatformOrg(r.Context())
-		if err != nil {
-			h.Log.ErrorContext(r.Context(), "zitadel hook: platform org not read", slog.String("event.name", "zitadel_hook.failed"), slog.String("exception.message", err.Error()))
-			http.Error(w, "platform org unknown", http.StatusServiceUnavailable)
-			return
-		}
-		if c.ResourceOwner == platform {
-			w.WriteHeader(http.StatusNoContent) // platform users are never org members
-			return
-		}
+	if !h.outsidePlatform(w, r, c) {
+		return
 	}
-	if p.ProjectID != "" && h.ProjectID != "" && p.ProjectID != h.ProjectID {
+	projectID := ""
+	if h.Project != nil && (p.ProjectID != "" || c.EventType == ZitadelGrantAdded) {
+		id, err := h.Project(r.Context())
+		if err != nil {
+			h.Log.WarnContext(r.Context(), "zitadel hook: project id not known yet", slog.String("event.name", "zitadel_hook.not_ready"),
+				slog.String("exception.message", err.Error()))
+			http.Error(w, "project id unknown", http.StatusServiceUnavailable)
+			return
+		}
+		projectID = id
+	}
+	if p.ProjectID != "" && projectID != "" && p.ProjectID != projectID {
 		w.WriteHeader(http.StatusNoContent) // another project: not an org role
 		return
 	}
@@ -247,7 +265,7 @@ func (h *Handler) grant(w http.ResponseWriter, r *http.Request, c Call) {
 		Roles:        p.RoleKeys,
 		Removed:      c.EventType == ZitadelGrantRemoved || c.EventType == ZitadelGrantCascadeRemoved,
 	}
-	if c.EventType == ZitadelGrantAdded && p.ProjectID == "" && h.ProjectID != "" {
+	if c.EventType == ZitadelGrantAdded && p.ProjectID == "" && projectID != "" {
 		w.WriteHeader(http.StatusNoContent) // an added grant always names its project
 		return
 	}
@@ -284,6 +302,65 @@ func (h *Handler) grant(w http.ResponseWriter, r *http.Request, c Call) {
 		slog.String("event.name", "zitadel_hook.grant"),
 		slog.String("zitadel.event_type", c.EventType),
 		slog.String("enduser.id", p.UserID),
+		slog.String("outcome", string(out)))
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// outsidePlatform reports whether the event's org is not the platform org. It
+// answers the call and returns false for the platform org (its grants, operator,
+// are never mirrored: 204) and when the platform org cannot be read (503).
+func (h *Handler) outsidePlatform(w http.ResponseWriter, r *http.Request, c Call) bool {
+	if h.PlatformOrg == nil {
+		return true
+	}
+	platform, err := h.PlatformOrg(r.Context())
+	if err != nil {
+		h.Log.ErrorContext(r.Context(), "zitadel hook: platform org not read", slog.String("event.name", "zitadel_hook.failed"), slog.String("exception.message", err.Error()))
+		http.Error(w, "platform org unknown", http.StatusServiceUnavailable)
+		return false
+	}
+	if c.ResourceOwner == platform {
+		w.WriteHeader(http.StatusNoContent) // platform users are never org members
+		return false
+	}
+	return true
+}
+
+// grantStatus mirrors user.grant.deactivated and user.grant.reactivated. The
+// events carry no payload; the store acts only on a grant it mirrored before (by
+// grant id, in the org of the event), so no project check is needed.
+func (h *Handler) grantStatus(w http.ResponseWriter, r *http.Request, c Call) {
+	if h.Grants == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if c.AggregateType != "usergrant" || c.Sequence == 0 || c.AggregateID == "" || c.ResourceOwner == "" || c.InstanceID == "" {
+		http.Error(w, "event misses ids", http.StatusBadRequest)
+		return
+	}
+	if !h.outsidePlatform(w, r, c) {
+		return
+	}
+	out, err := h.Grants.ApplyGrantStatus(r.Context(), orgs.GrantStatusChange{
+		Key:          c.Key(),
+		ZitadelOrgID: c.ResourceOwner,
+		GrantID:      c.AggregateID,
+		Active:       c.EventType == ZitadelGrantReactivated,
+	})
+	if err != nil {
+		h.Log.ErrorContext(r.Context(), "zitadel hook: grant status not mirrored", slog.String("event.name", "zitadel_hook.failed"),
+			slog.String("zitadel.event_type", c.EventType), slog.String("exception.message", err.Error()))
+		http.Error(w, "store failed", http.StatusInternalServerError)
+		return
+	}
+	level := slog.LevelInfo
+	if out == orgs.OutcomeLastOwner || out == orgs.OutcomeUnconfirmed {
+		level = slog.LevelWarn // identity and Zitadel disagree; the mirror fails closed.
+	}
+	h.Log.Log(r.Context(), level, "zitadel hook: grant status",
+		slog.String("event.name", "zitadel_hook.grant_status"),
+		slog.String("zitadel.event_type", c.EventType),
+		slog.String("zitadel.grant_id", c.AggregateID),
 		slog.String("outcome", string(out)))
 	w.WriteHeader(http.StatusNoContent)
 }

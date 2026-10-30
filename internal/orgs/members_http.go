@@ -232,6 +232,10 @@ func (h *Handler) memberRefusal(w http.ResponseWriter, r *http.Request, a access
 	case errors.Is(err, ErrMemberExists):
 		refused(codeMemberExists)
 		writeProblem(w, r, http.StatusConflict, codeMemberExists, "The email is a member of this org already.")
+	case errors.Is(err, ErrNotReady):
+		h.Log.WarnContext(ctx, "member change: zitadel project id not known yet", slog.String("event.name", "orgs.member_change_not_ready"),
+			slog.String("op", op))
+		writeNotReady(w, r)
 	case errors.Is(err, ErrUpstream):
 		h.Log.ErrorContext(r.Context(), "member change: zitadel refused", slog.String("event.name", "orgs.member_change_upstream_failed"),
 			slog.String("op", op), slog.String("exception.message", err.Error()))

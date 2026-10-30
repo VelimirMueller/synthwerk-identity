@@ -32,6 +32,9 @@
 //	                                     Unset (or no API URL) = role and status changes stay in identity, Zitadel is
 //	                                     not written, an invite answers 502. Invites also need ORG_USER_MANAGER (#37).
 //	SYNTHWERK_IDENTITY_ZITADEL_PROJECT_ID  project synthwerk-api; grants of other projects are dropped.
+//	SYNTHWERK_IDENTITY_ZITADEL_PROJECT_ID_FILE  file with that id, written by zitadel-bootstrap after
+//	                                     identity starts. Read per call until it holds an id, then kept. The fixed
+//	                                     id wins. Until the id is known, invites answer 503 (#37).
 //	SYNTHWERK_IDENTITY_MFA_GATE_KEY_FILE      file with the signing key of the MFA gate target (secret).
 //	                                     Set = the gate listens on the hook address; it needs the Zitadel client.
 //	SYNTHWERK_IDENTITY_TOKEN_CLAIMS_KEY_FILE  file with the signing key of the pre-access-token target (secret).
@@ -175,6 +178,7 @@ func run(ctx context.Context) error {
 	if zc != nil {
 		store.Grants = zc
 		store.Users = zc
+		store.GrantStates = zc
 	} else {
 		logger.WarnContext(ctx, "zitadel client off: role and status changes stay in identity, invites answer 502", slog.String("event.name", "zitadel.client_off"))
 	}
@@ -326,16 +330,20 @@ func hookServer(db *pgxpool.Pool, store *orgs.Store, zc *zitadel.Client, logger 
 	}
 	h := &zitadelhook.Handler{
 		Grants:     store,
-		ProjectID:  env.Get(app.Service, "ZITADEL_PROJECT_ID", ""),
 		Store:      zitadelhook.Postgres{DB: db},
 		SigningKey: readKey(keyFile),
 		Source:     source,
 		Log:        logger,
 		Now:        time.Now,
 	}
+	project := zitadelProject()
 	if zc != nil {
 		h.OrgName = zc.OrgName
 		h.PlatformOrg = zc.PlatformOrg
+		project = zc.Project
+	}
+	if project != nil {
+		h.Project = project.Resolve
 	}
 	mux := http.NewServeMux()
 	mux.Handle(zitadelhook.Path, h)
@@ -450,9 +458,9 @@ func zitadelClient() *zitadel.Client {
 		return nil
 	}
 	return &zitadel.Client{
-		BaseURL:   apiURL,
-		Host:      env.Get(app.Service, "ZITADEL_HOST", ""),
-		ProjectID: env.Get(app.Service, "ZITADEL_PROJECT_ID", ""),
+		BaseURL: apiURL,
+		Host:    env.Get(app.Service, "ZITADEL_HOST", ""),
+		Project: zitadelProject(),
 		Token: func() (string, error) {
 			b, err := os.ReadFile(patFile) //nolint:gosec // G304: path from our own config
 			if err != nil {
@@ -461,6 +469,17 @@ func zitadelClient() *zitadel.Client {
 			return strings.TrimSpace(string(b)), nil
 		},
 	}
+}
+
+// zitadelProject resolves the project synthwerk-api from the fixed id or the id
+// file, or is nil when neither is set.
+func zitadelProject() *zitadel.Project {
+	id := env.Get(app.Service, "ZITADEL_PROJECT_ID", "")
+	file := env.Get(app.Service, "ZITADEL_PROJECT_ID_FILE", "")
+	if id == "" && file == "" {
+		return nil
+	}
+	return &zitadel.Project{ID: id, File: file}
 }
 
 func splitList(v string) []string {
