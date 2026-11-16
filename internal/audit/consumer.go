@@ -1,8 +1,9 @@
 package audit
 
 // The audit list consumers of other services' streams: the llm AI settings
-// changes (aisettings.go, synthwerk#39) and the studio page builder changes
-// (studio.go, synthwerk#106). Each one is a JetStream durable consumer that
+// changes (aisettings.go, synthwerk#39), the studio page builder changes
+// (studio.go, synthwerk#106) and the llm admin AI tool calls (toolcall.go,
+// synthwerk#53). Each one is a JetStream durable consumer that
 // copies every valid event into identity.audit_events. The rules are the same
 // for every source:
 //

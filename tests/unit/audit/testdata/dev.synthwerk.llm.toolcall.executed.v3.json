@@ -1,0 +1,21 @@
+{
+  "specversion": "1.0",
+  "id": "019a8b10-3c4d-7e5f-8a6b-7c8d9e0f1a2b",
+  "source": "/synthwerk/llm/dev",
+  "type": "dev.synthwerk.llm.toolcall.executed.v3",
+  "subject": "019a8b0f-1a2b-7c3d-8e4f-5a6b7c8d9e0f",
+  "time": "2026-11-16T09:30:00Z",
+  "datacontenttype": "application/json",
+  "dataschema": "https://schemas.synthwerk.dev/events/llm/toolcall.executed.v3.json",
+  "orgid": "0199f3a0-5b6c-7d8e-9f0a-1b2c3d4e5f60",
+  "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+  "actor": "user:283746192837461928",
+  "data": {
+    "tool": "llm_get_org_usage",
+    "scope": "org",
+    "org_id": "0199f3a0-5b6c-7d8e-9f0a-1b2c3d4e5f60",
+    "conversation_id": "019a8b0f-1a2b-7c3d-8e4f-5a6b7c8d9e0f",
+    "outcome": "ok",
+    "duration_ms": 12
+  }
+}

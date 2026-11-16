@@ -55,6 +55,9 @@ type Config struct {
 	// StudioPages reports the EVT_STUDIO consumer of the audit list for /readyz (not
 	// critical, synthwerk#106). Nil: no check.
 	StudioPages func(ctx context.Context) error
+	// ToolCalls reports the EVT_LLM consumer of the admin AI tool calls for
+	// /readyz (not critical, synthwerk#53).
+	ToolCalls func(ctx context.Context) error
 }
 
 // Pinger checks the database connection. *pgxpool.Pool satisfies it.
@@ -82,6 +85,10 @@ func New(pinger Pinger, logger *slog.Logger, cfg Config) (*App, error) {
 	if cfg.StudioPages != nil {
 		// Not critical: studio creates EVT_STUDIO; until then the events wait in its outbox.
 		checks = append(checks, health.Check{Name: "studio_pages", Run: cfg.StudioPages, Detail: "studio page consumer not attached"})
+	}
+	if cfg.ToolCalls != nil {
+		// Not critical: llm creates EVT_LLM; until then the events wait in its outbox.
+		checks = append(checks, health.Check{Name: "llm_toolcalls", Run: cfg.ToolCalls, Detail: "toolcall consumer not attached"})
 	}
 	if cfg.Verifier != nil {
 		// Not critical: a token check fails closed (401/503) while the keys are away.
