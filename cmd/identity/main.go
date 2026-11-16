@@ -217,7 +217,7 @@ func run(ctx context.Context) error {
 	// Outbox relay to EVT_IDENTITY and the EVT_LLM and EVT_STUDIO consumers of the audit list,
 	// when NATS is set.
 	var relay *outbox.Relay
-	var aiSettings, studioPages *audit.Consumer
+	var aiSettings, studioPages, toolCalls *audit.Consumer
 	if natsURL := env.Get(app.Service, "NATS_URL", ""); natsURL != "" {
 		nc, err := nats.Connect(natsURL, nats.Name("synthwerk-"+app.Service), nats.MaxReconnects(-1),
 			nats.CustomInboxPrefix(app.NATSInboxPrefix))
@@ -247,6 +247,9 @@ func run(ctx context.Context) error {
 		// studio owns EVT_STUDIO: same rules (synthwerk#106).
 		studioPages = audit.NewStudioConsumer(js, &audit.Writer{DB: db}, logger, audit.ConsumerConfig{})
 		appCfg.StudioPages = studioPages.Ready
+		// Admin AI tool calls of llm, also on EVT_LLM (synthwerk#53).
+		toolCalls = audit.NewToolCallConsumer(js, &audit.Writer{DB: db}, logger, audit.ConsumerConfig{})
+		appCfg.ToolCalls = toolCalls.Ready
 	}
 
 	// 4. App and migrations. /readyz answers 503 until here.
@@ -301,6 +304,9 @@ func run(ctx context.Context) error {
 	}
 	if studioPages != nil {
 		g.Go(func() error { return studioPages.Run(gctx) })
+	}
+	if toolCalls != nil {
+		g.Go(func() error { return toolCalls.Run(gctx) })
 	}
 	if zc != nil {
 		rm := &account.Remover{DB: db, Users: zc, Log: logger}
